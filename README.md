@@ -130,7 +130,7 @@ src/main/java/org/example/restaurant/
 ### 第一步：创建数据库
 
 ```sql
-CREATE DATABASE waimai_practice CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE restaurant_management CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
 ### 第二步：执行初始化脚本

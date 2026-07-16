@@ -1,15 +1,15 @@
 -- ============================================
 -- 在线餐饮管理平台 数据库完整初始化脚本
--- 数据库: waimai_practice
+-- 数据库: restaurant_management
 -- 使用方式: 全选(Ctrl+A) → 执行(Ctrl+Enter)
 -- 注意: 会先删除旧表再重建，确保表结构与代码匹配
 -- ============================================
 
-CREATE DATABASE IF NOT EXISTS waimai_practice
+CREATE DATABASE IF NOT EXISTS restaurant_management
     CHARACTER SET utf8mb4
     COLLATE utf8mb4_unicode_ci;
 
-USE waimai_practice;
+USE restaurant_management;
 
 -- 清空旧表（确保结构与代码完全匹配）
 DROP TABLE IF EXISTS order_status_log;
