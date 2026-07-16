@@ -28,8 +28,9 @@ public class WebConfig implements WebMvcConfigurer {
                 //2，排除不需要拦截的路径（登录路径）
                 .excludePathPatterns("/employees/login", //登录接口
                         "/employees/login/**",
-                        "/users/login",//放行用户登录
-                        "/users/register",//放行用户注册
+                        "/users/**",//用户端路径由 UserJwtInterceptor 处理
+                        "/orders/scan-order",//扫码点餐：顾客和员工均可访问
+                        "/orders/table/**",//查询桌台活跃订单：顾客扫码后使用
                         "/error",//spring错误页
                         "/swagger-ui/**",//Swagger/Knife4j路径（必须放行，否则无法访问文档)
                         "/v3/api-docs/**",//OpenAPI文档数据
@@ -40,7 +41,7 @@ public class WebConfig implements WebMvcConfigurer {
 
         //用户拦截器（新增）
         registry.addInterceptor(userJwtInterceptor)
-                .addPathPatterns("/users/**")
+                .addPathPatterns("/users/**", "/orders/scan-order", "/orders/table/**")
                 .excludePathPatterns("/users/login","/users/register");
     }
 }
