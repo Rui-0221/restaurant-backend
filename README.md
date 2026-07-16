@@ -55,9 +55,9 @@
 │  REST API (10个Controller) + WebSocket 端点             │
 ├─────────────────────────────────────────────────────────┤
 │                     Interceptor 层                      │
-│  JwtInterceptor (员工认证+角色解析)                      │
-│  UserJwtInterceptor (用户认证)                           │
-│  → ThreadLocal (UserContext)                            │
+│  JwtInterceptor (员工认证+角色解析 → /employees, /orders, /admin) │
+│  UserJwtInterceptor (用户认证 → /users, /orders/scan-order)      │
+│  → ThreadLocal (UserContext)                             │
 ├─────────────────────────────────────────────────────────┤
 │                     Service 层                          │
 │  核心业务: placeOrder(首次/加菜), updateOrderStatus     │
@@ -103,11 +103,13 @@ src/main/java/org/example/restaurant/
 │   ├── RedisConfig              # StringRedisTemplate 序列化
 │   ├── WebSocketConfig          # /ws/kitchen 端点注册
 │   └── SwaggerConfig            # Knife4j 文档配置
-├── common/                  # 公共组件 (6个)
-│   ├── JwtUtil                  # Token 生成/解析（含角色）
+├── common/                  # 公共组件 (7个)
+│   ├── JwtUtil                  # Token 生成/解析（含角色+类型）
 │   ├── UserContext              # ThreadLocal 用户上下文
 │   ├── Result                   # 统一响应格式
+│   ├── ResponseUtil             # 拦截器401 JSON 响应工具
 │   ├── BusinessException        # 业务异常
+│   ├── PasswordEncoderUtil      # BCrypt 密码加密
 │   └── GlobalExceptionHandler   # 全局异常处理
 ├── websocket/               # WebSocket 处理器
 │   └── KitchenWebSocketHandler  # 频道隔离 + 新订单/加菜通知
@@ -159,7 +161,7 @@ spring:
 ### 第四步：启动
 
 ```powershell
-cd restaurant-backend-Claude-test
+cd restaurant-backend
 mvn spring-boot:run
 ```
 
@@ -448,7 +450,7 @@ POST /employees/login
 
 | 端点 | 连接方式 | 接收的消息类型 |
 |------|------|------|
-| `ws://localhost:8080/ws/kitchen?role=kitchen` | 后厨显示屏连接 | `NEW_ORDER`（新订单）、`ADD_ITEMS`（加菜） |
+| `ws://localhost:8080/ws/kitchen?role=kitchen&token=<JWT>` | 后厨显示屏连接 | `NEW_ORDER`（新订单）、`ADD_ITEMS`（加菜） |
 
 **消息格式**:
 
@@ -474,7 +476,7 @@ POST /employees/login
 }
 ```
 
-**频道隔离设计**: 连接时通过 `?role=kitchen` 参数指定频道，服务端维护 `Map<String, Set<WebSocketSession>>`，厨房只收厨房的消息，未来可扩展 waiter/customer 频道。
+**频道隔离设计**: 连接时通过 `?role=kitchen&token=<JWT>` 参数指定频道和认证，服务端维护 `Map<String, Set<WebSocketSession>>`，握手时校验员工 JWT，厨房只收厨房的消息，未来可扩展 waiter/customer 频道。
 
 ---
 
@@ -482,6 +484,9 @@ POST /employees/login
 
 ### Token 生成流程
 
+系统生成两种类型的 JWT Token，通过 `type` claim 区分：
+
+**员工 Token**:
 ```
 员工登录 POST /employees/login
 → EmployeeServiceImpl.login() 验证用户名密码(BCrypt)
@@ -490,15 +495,52 @@ POST /employees/login
 → 返回给前端，前端存入 localStorage
 ```
 
+**用户 Token**:
+```
+用户登录 POST /users/login
+→ UserServiceImpl.login() 验证手机号密码(BCrypt)
+→ JwtUtil.generateUserToken(userId) 生成Token
+→ Token Payload: {sub: "1", type: "user", exp: +2h}
+→ 返回给前端（无 role 字段，仅用于顾客端）
+```
+
 ### Token 校验流程
 
+系统使用**双拦截器**区分员工端和用户端，按 token 类型隔离：
+
+```
+请求到达 → 路径匹配
+  ├── /employees/**, /orders/**, /admin/** ...
+  │     → JwtInterceptor 校验 token 类型必须为 "employee"
+  │     → 解析 employeeId + role → 存入 UserContext
+  │
+  ├── /users/**, /orders/scan-order, /orders/table/**
+  │     → UserJwtInterceptor 校验 token 类型必须为 "user"
+  │     → 解析 userId → 存入 UserContext
+  │
+  └── /users/login, /users/register, /employees/login, /ws/**, /doc.html ...
+        → 直接放行（无需 Token）
+```
+
+**员工 Token 校验**:
 ```
 请求到达 → JwtInterceptor.preHandle()
 → 从 Header 取 "Authorization: Bearer <token>"
-→ JwtUtil.parseEmployeeId(token) 解析员工ID
+→ JwtUtil.parseTokenType(token) 校验类型为 "employee"
+→ JwtUtil.parseUserId(token) 解析员工ID
 → JwtUtil.parseRole(token) 解析角色
 → UserContext.setEmployeeId() + UserContext.setRole() 存入ThreadLocal
 → Controller/Service 通过 UserContext 获取当前用户信息
+→ afterCompletion() 中 UserContext.clear() 清理
+```
+
+**用户 Token 校验**:
+```
+请求到达 → UserJwtInterceptor.preHandle()
+→ 从 Header 取 "Authorization: Bearer <token>"
+→ JwtUtil.parseTokenType(token) 校验类型为 "user"
+→ JwtUtil.parseUserId(token) 解析用户ID
+→ UserContext.setUserId() 存入ThreadLocal
 → afterCompletion() 中 UserContext.clear() 清理
 ```
 
@@ -512,12 +554,27 @@ POST /employees/login
 
 ### 路径拦截白名单
 
-以下路径**不拦截**（无需Token即可访问）：
-- `/employees/login` — 员工登录
-- `/users/login`, `/users/register` — 用户登录/注册
-- `/swagger-ui/**`, `/v3/api-docs/**`, `/doc.html`, `/webjars/**` — API文档
-- `/ws/**` — WebSocket连接
-- `/error` — Spring错误页
+**员工拦截器** (`JwtInterceptor`) 覆盖 `/**`，排除以下路径：
+
+| 排除路径 | 原因 |
+|------|------|
+| `/employees/login`, `/employees/login/**` | 员工登录 |
+| `/users/**` | 用户端路径，由 UserJwtInterceptor 处理 |
+| `/orders/scan-order` | 扫码点餐，顾客和员工均可访问 |
+| `/orders/table/**` | 查询桌台活跃订单，顾客扫码后使用 |
+| `/swagger-ui/**`, `/v3/api-docs/**`, `/doc.html`, `/webjars/**` | API 文档 |
+| `/ws/**` | WebSocket 连接（握手时自行校验 JWT） |
+| `/error` | Spring 错误页 |
+
+**用户拦截器** (`UserJwtInterceptor`) 覆盖以下路径，排除 `/users/login` 和 `/users/register`：
+
+| 覆盖路径 | 说明 |
+|------|------|
+| `/users/**` | 用户 CRUD + 信息查询 |
+| `/orders/scan-order` | 扫码点餐 |
+| `/orders/table/**` | 查询桌台活跃订单 |
+
+> 注意：`/orders/scan-order` 和 `/orders/table/**` 被员工拦截器排除、由用户拦截器接管，确保顾客（用户 token）可以正常扫码点餐。
 
 ---
 
@@ -626,6 +683,7 @@ OrdersServiceImpl → PrintService (接口)
 |------|------|------|
 | 金额后端重算 | DTO 不含 price 字段，查DB真实价格计算 | 防止前端篡改价格 |
 | 密码加密 | BCrypt 哈希（每用户独立盐值） | 数据库泄露后密码不可逆 |
+| 双 Token 类型隔离 | JWT 含 type claim（employee/user），拦截器交叉校验 | 防止用户 token 越权访问员工接口，反之亦然 |
 | JWT 过期 | Token 有效期 2 小时 | 限制泄露 Token 影响时间 |
 | 角色权限 | JWT 含 role + 业务层二次校验 | 防止越权操作 |
 | 桌台并发 | CAS 乐观锁（version + WHERE 条件） | 防止重复占用 |
