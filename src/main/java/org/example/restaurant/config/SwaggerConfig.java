@@ -1,8 +1,11 @@
 package org.example.restaurant.config;
 
+import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Contact;
 import io.swagger.v3.oas.models.info.Info;
+import io.swagger.v3.oas.models.security.SecurityRequirement;
+import io.swagger.v3.oas.models.security.SecurityScheme;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -15,8 +18,10 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class SwaggerConfig {
 
+    private static final String SECURITY_SCHEME_NAME = "BearerAuth";
+
     /**
-     * 配置 OpenAPI 文档基本信息
+     * 配置 OpenAPI 文档基本信息 + JWT Bearer 认证方案
      */
     @Bean
     public OpenAPI customOpenAPI() {
@@ -31,8 +36,17 @@ public class SwaggerConfig {
                                 "• 订单状态流转（管理员/服务员/后厨角色权限联动）\n" +
                                 "• 在售菜品查询（Redis Cache-Aside + 穿透防护）\n" +
                                 "• WebSocket 后厨实时通知\n\n" +
-                                "认证方式：Authorization: Bearer <JWT Token>")
+                                "认证方式：点击右上角 Authorize 按钮，输入 Bearer <JWT Token>")
                         .contact(new Contact()
-                                .name("开发团队")));
+                                .name("开发团队")))
+                .addSecurityItem(new SecurityRequirement().addList(SECURITY_SCHEME_NAME))
+                .components(new Components()
+                        .addSecuritySchemes(SECURITY_SCHEME_NAME,
+                                new SecurityScheme()
+                                        .name(SECURITY_SCHEME_NAME)
+                                        .type(SecurityScheme.Type.HTTP)
+                                        .scheme("bearer")
+                                        .bearerFormat("JWT")
+                                        .description("输入 JWT Token（不含 Bearer 前缀，Swagger 会自动添加）")));
     }
 }
