@@ -1,0 +1,139 @@
+package org.example.restaurant.service.impl;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.restaurant.common.BusinessException;
+import org.example.restaurant.entity.Dish;
+import org.example.restaurant.mapper.DishMapper;
+import org.example.restaurant.service.DishService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Service;
+
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.List;
+
+@Service
+public class DishServiceImpl implements DishService {
+
+    private static final String CACHE_KEY_ON_SALE = "dish:onSale";
+    private static final Duration CACHE_TTL = Duration.ofHours(1);
+    private static final Duration EMPTY_CACHE_TTL = Duration.ofSeconds(60);
+    /** 缓存空值标记（与合法的JSON序列化结果区分，避免歧义） */
+    private static final String EMPTY_MARKER = "__EMPTY__";
+
+    @Autowired
+    private DishMapper dishMapper;
+
+    @Autowired
+    private StringRedisTemplate redisTemplate;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Override
+    public List<Dish> list() {
+        return dishMapper.findAll();
+    }
+
+    @Override
+    public Dish getById(Long id) {
+        Dish dish = dishMapper.findById(id);
+        if (dish == null) {
+            throw new BusinessException("菜品不存在:id=" + id);
+        }
+        return dish;
+    }
+
+    @Override
+    public void add(Dish dish) {
+        LocalDateTime now = LocalDateTime.now();
+        dish.setCreateTime(now);
+        dish.setUpdateTime(now);
+        dishMapper.insert(dish);
+        // 新增菜品后清除缓存，下次查询时重新加载
+        evictOnSaleCache();
+    }
+
+    @Override
+    public void update(Dish dish) {
+        dishMapper.update(dish);
+        // 修改菜品后清除缓存（可能改了status或价格）
+        evictOnSaleCache();
+    }
+
+    @Override
+    public void delete(Long id) {
+        dishMapper.deleteById(id);
+        // 删除菜品后清除缓存
+        evictOnSaleCache();
+    }
+
+    // ==================== Redis 缓存：在售菜品（规划 Day8）====================
+
+    /**
+     * 查询在售菜品 — Cache-Aside 模式
+     * 1. 先查 Redis 缓存
+     * 2. 缓存命中 → 直接返回
+     * 3. 缓存未命中 → 查数据库 → 写入缓存 → 返回
+     *
+     * 缓存穿透防护：数据库无数据时缓存空列表60秒，避免大量请求穿透到DB
+     */
+    @Override
+    public List<Dish> listOnSale() {
+        // 1. 查缓存
+        String cached = redisTemplate.opsForValue().get(CACHE_KEY_ON_SALE);
+        if (cached != null) {
+            // 缓存命中（包括缓存的空列表）
+            return deserializeDishList(cached);
+        }
+
+        // 2. 查数据库
+        List<Dish> dishes = dishMapper.findOnSale();
+
+        // 3. 写入缓存（含穿透防护：空值也缓存，但TTL更短）
+        if (dishes == null || dishes.isEmpty()) {
+            // 缓存空列表短时间，防止缓存穿透
+            redisTemplate.opsForValue().set(CACHE_KEY_ON_SALE, EMPTY_MARKER, EMPTY_CACHE_TTL);
+            return Collections.emptyList();
+        } else {
+            String json = serializeDishList(dishes);
+            redisTemplate.opsForValue().set(CACHE_KEY_ON_SALE, json, CACHE_TTL);
+            return dishes;
+        }
+    }
+
+    /**
+     * 清除在售菜品缓存
+     * 在 add / update / delete 菜品时调用
+     */
+    private void evictOnSaleCache() {
+        redisTemplate.delete(CACHE_KEY_ON_SALE);
+    }
+
+    // ==================== JSON 序列化/反序列化工具 ====================
+
+    private String serializeDishList(List<Dish> dishes) {
+        try {
+            return objectMapper.writeValueAsString(dishes);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException("菜品列表序列化失败");
+        }
+    }
+
+    private List<Dish> deserializeDishList(String json) {
+        // 空值标记 → 返回空列表
+        if (EMPTY_MARKER.equals(json)) {
+            return Collections.emptyList();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<Dish>>() {});
+        } catch (JsonProcessingException e) {
+            // JSON损坏时清除缓存，降级查库
+            evictOnSaleCache();
+            return dishMapper.findOnSale();
+        }
+    }
+}

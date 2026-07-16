@@ -1,0 +1,43 @@
+# 敏感配置文件（含数据库密码、Redis密码、JWT密钥等）
+application-local.yml
+application-*.local.yml
+*.local.yml
+
+# 环境变量文件
+.env
+.env.*
+
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.project
+.classpath
+.settings/
+.factorypath
+
+# 日志文件
+*.log
+logs/
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/settings.local.json
+
+# HELP.md（IDE 生成）
+HELP.md
