@@ -27,7 +27,7 @@ public  interface UserMapper {
             "(#{name},#{password},#{phone},#{sex},#{avatar},#{createTime})")
     void insert(User user);
 
-    @Update("UPDATE `user` SET name=#{name},password=#{password},phone=#{phone}," +
+    @Update("UPDATE `user` SET name=#{name},phone=#{phone}," +
             "sex=#{sex},avatar=#{avatar},create_time=#{createTime} WHERE id=#{id}")
     void update(User user);
 

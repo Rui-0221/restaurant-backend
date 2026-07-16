@@ -1,21 +1,17 @@
-package org.example.restaurant.entity;
+package org.example.restaurant.dto;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
-import java.time.LocalDateTime;
-
 @Data
-public class User {
+public class UserUpdateDTO {
+    @NotNull(message = "用户ID不能为空")
     private Long id;
     @NotBlank(message = "用户姓名不能为空")
     private String name;
-    @JsonIgnore
-    private String password;
     @NotBlank(message = "手机号不能为空")
-    private String phone;//用于查找用户
+    private String phone;
     private Integer sex;
     private String avatar;
-    private LocalDateTime createTime;
 }

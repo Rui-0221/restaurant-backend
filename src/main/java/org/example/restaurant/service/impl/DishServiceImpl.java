@@ -59,6 +59,7 @@ public class DishServiceImpl implements DishService {
 
     @Override
     public void update(Dish dish) {
+        dish.setUpdateTime(LocalDateTime.now());
         dishMapper.update(dish);
         // 修改菜品后清除缓存（可能改了status或价格）
         evictOnSaleCache();

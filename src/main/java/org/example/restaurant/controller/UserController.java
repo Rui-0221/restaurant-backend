@@ -5,7 +5,9 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.example.restaurant.common.JwtUtil;
 import org.example.restaurant.common.Result;
+import org.example.restaurant.dto.UserAddDTO;
 import org.example.restaurant.dto.UserLoginDTO;
+import org.example.restaurant.dto.UserUpdateDTO;
 import org.example.restaurant.entity.User;
 import org.example.restaurant.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,14 +39,26 @@ public class UserController {
 
     @PostMapping
     @Operation(summary = "新增用户", description = "添加新用户")
-    public Result<String> add(@Valid @RequestBody User user){
+    public Result<String> add(@Valid @RequestBody UserAddDTO dto){
+        User user = new User();
+        user.setName(dto.getName());
+        user.setPassword(dto.getPassword());
+        user.setPhone(dto.getPhone());
+        user.setSex(dto.getSex());
+        user.setAvatar(dto.getAvatar());
         userService.add(user);
         return Result.success("添加成功");
     }
 
     @PutMapping
     @Operation(summary = "修改用户", description = "更新用户信息")
-    public Result<String> update(@Valid @RequestBody User user){
+    public Result<String> update(@Valid @RequestBody UserUpdateDTO dto){
+        User user = new User();
+        user.setId(dto.getId());
+        user.setName(dto.getName());
+        user.setPhone(dto.getPhone());
+        user.setSex(dto.getSex());
+        user.setAvatar(dto.getAvatar());
         userService.update(user);
         return Result.success("修改成功");
     }
@@ -73,7 +87,13 @@ public class UserController {
 
     @PostMapping("/register")
     @Operation(summary="用户注册",description="手机号+密码注册")
-    public Result<String> register(@Valid @RequestBody User user){
+    public Result<String> register(@Valid @RequestBody UserAddDTO dto){
+        User user = new User();
+        user.setName(dto.getName());
+        user.setPassword(dto.getPassword());
+        user.setPhone(dto.getPhone());
+        user.setSex(dto.getSex());
+        user.setAvatar(dto.getAvatar());
         userService.register(user);
         return Result.success("注册成功");
     }

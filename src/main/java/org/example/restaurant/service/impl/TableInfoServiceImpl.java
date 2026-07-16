@@ -9,6 +9,7 @@ import org.example.restaurant.mapper.TableStatusLogMapper;
 import org.example.restaurant.service.TableInfoService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -57,7 +58,7 @@ public class TableInfoServiceImpl implements TableInfoService {
      * 状态流转规则：0空闲→1占用/2预订；1占用→0空闲；2预订→0空闲/1占用
      */
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void updateStatus(Long id, Integer newStatus) {
         TableInfo table = tableInfoMapper.findById(id);
         if (table == null) {

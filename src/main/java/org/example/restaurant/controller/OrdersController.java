@@ -77,6 +77,10 @@ public class OrdersController {
         description = "扫码下单。若该桌台已有活跃订单(状态1-4)，则自动加菜追加明细；若无活跃订单，则占桌台并创建新订单。" +
                       "金额由后端强制重算，不信任前端。同一桌多人扫码、中途加菜都走此接口")
     public Result<OrderVO> scanOrder(@Valid @RequestBody ScanOrderDTO dto) {
+        // 用户认证后使用上下文中的 userId，防止伪造
+        if (UserContext.getUserId() != null) {
+            dto.setUserId(UserContext.getUserId());
+        }
         OrderVO vo = ordersService.placeOrder(dto);
         return Result.success(vo);
     }

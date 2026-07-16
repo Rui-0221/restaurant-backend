@@ -18,4 +18,6 @@ public class OrderDetail {
     private Integer amount;
     @NotNull(message = "价格不能为空")
     private BigDecimal price;
+    /** 菜品名称（仅用于打印小票，不映射数据库字段） */
+    private String dishName;
 }

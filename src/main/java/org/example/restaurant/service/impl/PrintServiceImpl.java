@@ -43,8 +43,9 @@ public class PrintServiceImpl implements PrintService {
         sb.append("--------------------------------\n");
 
         for (OrderDetail detail : details) {
+            String name = detail.getDishName() != null ? detail.getDishName() : "菜品#" + detail.getDishId();
             sb.append(String.format("%-10s  %-4d   %-6s  %s\n",
-                    "菜品#" + detail.getDishId(),
+                    name,
                     detail.getAmount(),
                     detail.getPrice(),
                     detail.getPrice().multiply(BigDecimal.valueOf(detail.getAmount()))));
@@ -80,8 +81,9 @@ public class PrintServiceImpl implements PrintService {
         sb.append("--------------------------------\n");
 
         for (OrderDetail detail : newDetails) {
+            String name = detail.getDishName() != null ? detail.getDishName() : "菜品#" + detail.getDishId();
             sb.append(String.format("%-10s  %-4d   %-6s  %s\n",
-                    "菜品#" + detail.getDishId(),
+                    name,
                     detail.getAmount(),
                     detail.getPrice(),
                     detail.getPrice().multiply(BigDecimal.valueOf(detail.getAmount()))));

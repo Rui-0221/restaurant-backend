@@ -8,7 +8,9 @@ import jakarta.validation.Valid;
 import org.example.restaurant.common.JwtUtil;
 import org.example.restaurant.common.Result;
 import org.example.restaurant.common.UserContext;
+import org.example.restaurant.dto.EmployeeAddDTO;
 import org.example.restaurant.dto.EmployeeLoginDTO;
+import org.example.restaurant.dto.EmployeeUpdateDTO;
 import org.example.restaurant.entity.Employee;
 import org.example.restaurant.service.EmployeeService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -66,14 +68,28 @@ public class EmployeeController {
 
     @PostMapping
     @Operation(summary = "新增员工",description = "添加新员工")
-    public Result<String> add(@Valid @RequestBody Employee employee){
+    public Result<String> add(@Valid @RequestBody EmployeeAddDTO dto){
+        Employee employee = new Employee();
+        employee.setUsername(dto.getUsername());
+        employee.setPassword(dto.getPassword());
+        employee.setName(dto.getName());
+        employee.setPhone(dto.getPhone());
+        if (dto.getRole() != null) employee.setRole(dto.getRole());
+        if (dto.getStatus() != null) employee.setStatus(dto.getStatus());
         employeeService.add(employee);
         return Result.success("添加成功");
     }
 
     @PutMapping
     @Operation(summary = "修改员工", description = "更新员工信息")
-    public Result<String> update(@Valid @RequestBody Employee employee){
+    public Result<String> update(@Valid @RequestBody EmployeeUpdateDTO dto){
+        Employee employee = new Employee();
+        employee.setId(dto.getId());
+        employee.setUsername(dto.getUsername());
+        employee.setName(dto.getName());
+        employee.setPhone(dto.getPhone());
+        if (dto.getRole() != null) employee.setRole(dto.getRole());
+        if (dto.getStatus() != null) employee.setStatus(dto.getStatus());
         employeeService.update(employee);
         return Result.success("修改成功");
     }

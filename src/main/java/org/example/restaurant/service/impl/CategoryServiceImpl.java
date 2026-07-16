@@ -6,6 +6,8 @@ import org.example.restaurant.mapper.CategoryMapper;
 import org.example.restaurant.service.CategoryService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service //告诉：Spring：把这个类放进容器里进行管理
@@ -26,7 +28,9 @@ public class CategoryServiceImpl implements CategoryService{
     }
     @Override
     public void add(Category category) {
-        // 以后可以在这里加校验：名称不能为空、不能重名等
+        LocalDateTime now = LocalDateTime.now();
+        category.setCreateTime(now);
+        category.setUpdateTime(now);
         categoryMapper.insert(category);
     }
 

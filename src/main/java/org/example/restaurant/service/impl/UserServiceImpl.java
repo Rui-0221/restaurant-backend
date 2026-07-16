@@ -41,6 +41,8 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public void update(User user){
+        // 密码通过 register 或专门的密码修改接口处理，此处不更新密码字段
+        user.setPassword(null);
         userMapper.update(user);
     }
 
@@ -53,13 +55,8 @@ public class UserServiceImpl implements UserService {
     public User login(String phone,String password){
         //1,根据手机号查询用户
         User user = userMapper.findByPhone(phone);
-        if(user==null){
-            throw new BusinessException("用户不存在");
-        }
-        //2,验证密码
-        //BCrypt加密后的密码存储，每次加密结果不同，所以用matches验证
-        if(!PasswordEncoderUtil.matches(password,user.getPassword())){
-            throw new BusinessException("密码错误");
+        if(user==null||!PasswordEncoderUtil.matches(password,user.getPassword())){
+            throw new BusinessException("手机号或密码错误");
         }
         return user;
     }

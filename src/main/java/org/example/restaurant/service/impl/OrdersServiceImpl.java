@@ -275,6 +275,7 @@ public class OrdersServiceImpl implements OrdersService {
 
             OrderDetail detail = new OrderDetail();
             detail.setDishId(item.getDishId());
+            detail.setDishName(dish.getName());
             detail.setAmount(item.getAmount());
             detail.setPrice(dish.getPrice());
             details.add(detail);

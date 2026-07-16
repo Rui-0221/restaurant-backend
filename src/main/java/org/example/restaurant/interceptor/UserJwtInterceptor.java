@@ -31,8 +31,33 @@ public class UserJwtInterceptor implements HandlerInterceptor {
         //3,解析token
         String token =authHeader.substring(7);
         try {
-            //验证是否为用户token
             String tokenType = JwtUtil.parseTokenType(token);
+            String path = request.getRequestURI();
+            boolean sharedPath = path.startsWith("/orders/scan-order")
+                    || path.startsWith("/orders/table/");
+
+            if (sharedPath) {
+                // 扫码点餐和桌台活跃订单查询：员工和用户均可访问
+                if ("employee".equals(tokenType)) {
+                    Long employeeId = JwtUtil.parseUserId(token);
+                    Integer role = JwtUtil.parseRole(token);
+                    request.setAttribute("employeeId", employeeId);
+                    request.setAttribute("role", role);
+                    UserContext.setEmployeeId(employeeId);
+                    UserContext.setRole(role);
+                    return true;
+                } else if ("user".equals(tokenType)) {
+                    Long userId = JwtUtil.parseUserId(token);
+                    request.setAttribute("userId", userId);
+                    UserContext.setUserId(userId);
+                    return true;
+                } else {
+                    ResponseUtil.write401(response, "权限不足");
+                    return false;
+                }
+            }
+
+            // /users/** 路径仅允许用户身份
             if (!"user".equals(tokenType)) {
                 ResponseUtil.write401(response, "权限不足，需要用户身份");
                 return false;
