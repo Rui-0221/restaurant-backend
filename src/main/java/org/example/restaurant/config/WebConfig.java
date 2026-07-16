@@ -33,6 +33,7 @@ public class WebConfig implements WebMvcConfigurer {
                         "/orders/table/**",//查询桌台活跃订单：顾客扫码后使用
                         "/error",//spring错误页
                         "/swagger-ui/**",//Swagger/Knife4j路径（必须放行，否则无法访问文档)
+                        "/swagger-ui.html",//Swagger UI 页面
                         "/v3/api-docs/**",//OpenAPI文档数据
                         "/doc.html",//Knife4j文档页面
                         "/webjars/**",//静态资源
