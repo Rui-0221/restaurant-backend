@@ -7,7 +7,6 @@ import org.example.restaurant.dto.ScanOrderDTO;
 import org.example.restaurant.entity.*;
 import org.example.restaurant.mapper.*;
 import org.example.restaurant.service.OrdersService;
-import org.example.restaurant.service.PrintService;
 import org.example.restaurant.service.TableInfoService;
 import org.example.restaurant.websocket.KitchenWebSocketHandler;
 import org.slf4j.Logger;
@@ -41,9 +40,6 @@ public class OrdersServiceImpl implements OrdersService {
 
     @Autowired
     private TableInfoService tableInfoService;
-
-    @Autowired
-    private PrintService printService;
 
     @Autowired
     private OrderStatusLogMapper orderStatusLogMapper;
@@ -123,10 +119,10 @@ public class OrdersServiceImpl implements OrdersService {
      */
     private OrderVO createNewOrder(ScanOrderDTO dto) {
         // 1. 占用桌台（乐观锁防并发）
-        //    如果桌台已空闲(0)，则占用(1)；如果已预订(2)，也转为占用(1)
+        //    如果桌台空闲(0)，则占用(1)
         boolean tableOccupiedByMe = false;
         TableInfo table = tableInfoService.getById(dto.getTableId());
-        if (table.getStatus() == 0 || table.getStatus() == 2) {
+        if (table.getStatus() == 0) {
             try {
                 tableInfoService.updateStatus(dto.getTableId(), 1);
                 tableOccupiedByMe = true;
@@ -164,16 +160,13 @@ public class OrdersServiceImpl implements OrdersService {
             details.forEach(d -> d.setOrderId(order.getId()));
             orderDetailMapper.batchInsert(details);
 
-            // 5. 事务提交后再执行外部I/O（打印、WebSocket），避免占用数据库连接
+            // 5. 事务提交后再执行 WebSocket 通知，避免占用数据库连接
             TransactionSynchronizationManager.registerSynchronization(
                     new TransactionSynchronization() {
                         @Override
                         public void afterCommit() {
-                            try {
-                                printService.printOrder(order, details);
-                            } catch (Exception e) {
-                                log.error("打印小票失败", e);
-                            }
+                            log.info("新订单已创建：orderId={}, tableId={}, items={}",
+                                    order.getId(), order.getTableId(), details.size());
 
                             try {
                                 kitchenWebSocketHandler.notifyNewOrder(order.getId(), dto.getTableId(), details.size());
@@ -225,16 +218,13 @@ public class OrdersServiceImpl implements OrdersService {
         newDetails.forEach(d -> d.setOrderId(orderId));
         orderDetailMapper.batchInsert(newDetails);
 
-        // 5. 事务提交后再执行外部I/O（打印、WebSocket），避免占用数据库连接
+        // 5. 事务提交后再执行 WebSocket 通知，避免占用数据库连接
         TransactionSynchronizationManager.registerSynchronization(
                 new TransactionSynchronization() {
                     @Override
                     public void afterCommit() {
-                        try {
-                            printService.printAddItems(order, newDetails);
-                        } catch (Exception e) {
-                            log.error("打印加菜单失败", e);
-                        }
+                        log.info("加菜已提交：orderId={}, tableId={}, newItems={}",
+                                orderId, order.getTableId(), newDetails.size());
 
                         try {
                             kitchenWebSocketHandler.notifyAddItems(orderId, order.getTableId(), newDetails.size());

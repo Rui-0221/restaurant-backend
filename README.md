@@ -51,11 +51,11 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                     Controller 层                       │
-│  Employee · User · TableInfo · Dish · Orders · Admin   │
-│  REST API (8个Controller) + WebSocket 端点              │
+│  Employee · User · TableInfo · Dish · Orders            │
+│  REST API (6个Controller) + WebSocket 端点              │
 ├─────────────────────────────────────────────────────────┤
 │                     Interceptor 层                      │
-│  JwtInterceptor (员工认证+角色解析 → /employees, /orders, /admin) │
+│  JwtInterceptor (员工认证+角色解析 → /employees, /orders) │
 │  UserJwtInterceptor (用户认证 → /users, /orders/scan-order)      │
 │  → ThreadLocal (UserContext)                             │
 ├─────────────────────────────────────────────────────────┤
@@ -76,25 +76,22 @@
 
 ```
 src/main/java/org/example/restaurant/
-├── controller/              # REST API (8个)
+├── controller/              # REST API (6个)
 │   ├── EmployeeController       # 员工管理 + 登录（写操作限管理员）
-│   ├── UserController           # 用户管理 + 注册登录
+│   ├── UserController           # 顾客注册/登录/查个人信息
 │   ├── TableInfoController      # 桌台CRUD + 乐观锁状态变更
 │   ├── DishController           # 菜品CRUD + Redis缓存在售列表
 │   ├── CategoryController       # 分类CRUD
-│   ├── OrdersController         # 订单CRUD + 扫码点餐 + 状态流转 + 活跃订单查询
-│   ├── OrderDetailController    # 订单明细
-│   └── AdminController          # 管理员统计（营业额）
-├── service/                 # 接口 (8个)
-├── service/impl/            # 实现 (8个)
+│   └── OrdersController         # 订单CRUD + 扫码点餐 + 状态流转 + 营业额统计
+├── service/                 # 接口 (6个)
+├── service/impl/            # 实现 (6个)
 │   ├── OrdersServiceImpl        # ⭐核心：placeOrder + addItemsToOrder + updateOrderStatus
 │   ├── TableInfoServiceImpl     # ⭐乐观锁CAS + 状态流转校验
 │   ├── DishServiceImpl          # ⭐Redis Cache-Aside + 穿透防护
-│   ├── PrintServiceImpl         # ESC/POS格式小票（首次+加菜）
 │   └── ...
-├── mapper/                  # MyBatis 注解式数据访问 (9个)
-├── entity/                  # 数据库实体 (9个)
-├── dto/                     # 请求/响应对象 (4个)
+├── mapper/                  # MyBatis 注解式数据访问 (8个)
+├── entity/                  # 数据库实体 (8个)
+├── dto/                     # 请求/响应对象 (7个)
 ├── interceptor/             # JWT拦截器 (2个)
 ├── config/                  # 配置类 (4个)
 │   ├── WebConfig                # 拦截器注册 + 路径白名单
@@ -139,8 +136,7 @@ CREATE DATABASE restaurant_management CHARACTER SET utf8mb4 COLLATE utf8mb4_unic
 - 员工表添加 `role` 字段
 - 订单表添加 `table_id`、移除配送字段
 - 创建 `table_info`（桌台信息，含 version 乐观锁字段）
-- 创建 `table_status_log`（桌台状态审计日志）
-- 创建 `order_status_log`（订单状态审计日志）
+- 创建 `order_status_log`（订单状态审计日志，营业额统计依据）
 - 插入 6 张测试桌台（A1~C1）
 
 ### 第三步：配置数据库密码
@@ -194,13 +190,12 @@ mvn spring-boot:run
 | DELETE | `/tables/{id}` | 删除桌台 |
 | **PUT** | **`/tables/{id}/status?status=1`** | **变更状态（CAS乐观锁）** |
 
-**状态枚举**: `0`空闲 `1`占用 `2`预订
+**状态枚举**: `0`空闲 `1`占用
 
 **状态流转规则**:
 ```
-0空闲 → 1占用  或  2预订
+0空闲 → 1占用
 1占用 → 0空闲
-2预订 → 0空闲  或  1占用
 ```
 
 **变更状态请求示例**:
@@ -422,11 +417,11 @@ POST /employees/login
 
 ---
 
-### 📊 管理员统计
+### 📊 管理员统计（隶属 OrdersController）
 
 | 方法 | 路径 | 说明 | 权限 |
 |------|------|------|:--:|
-| **GET** | **`/admin/statistics/today`** | 今日营业额（已结账订单总额） | 🔒 管理员(1) |
+| **GET** | **`/orders/statistics/today`** | 今日营业额（已结账订单总额） | 🔒 管理员(1) |
 
 **响应**:
 ```json
@@ -515,7 +510,7 @@ WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
 
 ```
 请求到达 → 路径匹配
-  ├── /employees/**, /orders/**, /admin/** ...
+  ├── /employees/**, /orders/** ...
   │     → JwtInterceptor 校验 token 类型必须为 "employee"
   │     → 解析 employeeId + role → 存入 UserContext
   │
@@ -576,7 +571,7 @@ WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
 
 | 覆盖路径 | 说明 |
 |------|------|
-| `/users/**` | 用户 CRUD + 信息查询 |
+| `/users/**` | 用户信息查询（注册/登录已放行） |
 | `/orders/scan-order` | 扫码点餐 |
 | `/orders/table/**` | 查询桌台活跃订单 |
 
@@ -599,16 +594,14 @@ mvn test
 
 ### 测试覆盖清单
 
-**TableInfoServiceTest（8个用例）**:
+**TableInfoServiceTest（7个用例）**:
 
 | 用例 | 验证点 |
 |------|------|
 | `shouldTransitionFromIdleToOccupied` | 0→1 正常流转 + version递增 |
 | `shouldTransitionFromOccupiedToIdle` | 1→0 正常流转 + version累加 |
-| `shouldTransitionFromIdleToReserved` | 0→2 预订功能 |
-| `shouldTransitionFromReservedToOccupied` | 2→1 预订转占用 |
 | `shouldThrowWhenIllegalTransition` | 相同状态流转拒绝 |
-| `shouldThrowWhenOccupiedToReserved` | 占用→预订拒绝 |
+| `shouldThrowWhenOccupiedToReserved` | 占用→非法状态拒绝 |
 | `shouldThrowWhenOptimisticLockConflict` | 过期version导致CAS失败 |
 | `shouldVersionIncrementCorrectly` | 连续操作version正确累加 |
 | `shouldThrowWhenTableNotExists` | 不存在的桌台抛异常 |
@@ -670,17 +663,6 @@ mvn test
 - **可测试性**：Service 层计算逻辑可直接单元测试，SQL 聚合较难脱离数据库测试
 - **可扩展性**：未来加折扣、优惠券、会员价等逻辑，在 Service 层扩展更方便
 
-### 4. 为什么打印模块要接口分离？
-
-```
-OrdersServiceImpl → PrintService (接口)
-                      ├── PrintServiceImpl (当前：控制台模拟)
-                      └── 未来：UsbPrinterImpl (USB打印机)
-                           网络打印、云打印...
-```
-
-订单业务代码只依赖 `PrintService` 接口。切换打印机时，**只改实现类，不动业务代码**。这是依赖倒置原则（DIP）的实践。
-
 ---
 
 ## 🔒 安全设计
@@ -696,7 +678,7 @@ OrdersServiceImpl → PrintService (接口)
 | 桌台并发 | CAS 乐观锁（version + WHERE 条件） | 防止重复占用 |
 | 加菜并发 | SELECT FOR UPDATE 行锁 | 防止丢失更新 |
 | 异常统一处理 | GlobalExceptionHandler | 不泄露内部错误细节 |
-| 审计日志 | TableStatusLog + OrderStatusLog | 操作可追溯 |
+| 审计日志 | OrderStatusLog（订单状态流转） | 营业额统计依据 |
 
 ---
 
@@ -709,7 +691,7 @@ CREATE TABLE table_info (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(50) NOT NULL,          -- 桌台名称 "A1"
     capacity INT DEFAULT 4,             -- 可容纳人数
-    status INT DEFAULT 0,               -- 0空闲 1占用 2预订
+    status INT DEFAULT 0,               -- 0空闲 1占用
     version INT DEFAULT 0,              -- 乐观锁版本号
     create_time DATETIME,
     update_time DATETIME
@@ -742,10 +724,10 @@ CREATE TABLE order_detail (
 );
 ```
 
-### 审计日志表
+### 订单状态日志表
 
-- `table_status_log`: table_id, from_status, to_status, operator_id, create_time
 - `order_status_log`: order_id, from_status, to_status, operator_id, create_time
+  - 用途：按结账时间（to_status=5）统计当日营业额，避免依赖订单创建时间造成的误差
 
 ---
 

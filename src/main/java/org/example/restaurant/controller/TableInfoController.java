@@ -15,7 +15,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/tables")
-@Tag(name = "桌台管理 ⭐核心", description = "桌台CRUD + CAS乐观锁状态流转。状态：0空闲/1占用/2预订")
+@Tag(name = "桌台管理 ⭐核心", description = "桌台CRUD + CAS乐观锁状态流转。状态：0空闲/1占用")
 public class TableInfoController {
 
     @Autowired
@@ -56,10 +56,10 @@ public class TableInfoController {
 
     /**
      * 状态变更（CAS乐观锁防并发）— 规划 Day1 核心接口
-     * 状态流转：0空闲→1占用/2预订；1占用→0空闲；2预订→0空闲/1占用
+     * 状态流转：0空闲→1占用；1占用→0空闲
      */
     @PutMapping("/{id}/status")
-    @Operation(summary = "变更桌台状态", description = "通过乐观锁CAS更新桌台状态，防止并发冲突。status: 0空闲/1占用/2预订")
+    @Operation(summary = "变更桌台状态", description = "通过乐观锁CAS更新桌台状态，防止并发冲突。status: 0空闲/1占用")
     public Result<Map<String, Object>> updateStatus(
             @PathVariable Long id,
             @RequestParam Integer status) {

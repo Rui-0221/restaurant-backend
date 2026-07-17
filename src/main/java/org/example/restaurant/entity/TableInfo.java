@@ -6,7 +6,7 @@ import java.time.LocalDateTime;
 
 /**
  * 桌台信息实体
- * status: 0空闲/1占用/2预订
+ * status: 0空闲/1占用
  * version: 乐观锁版本号
  */
 @Data

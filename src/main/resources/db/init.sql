@@ -13,7 +13,6 @@ USE restaurant_management;
 
 -- 清空旧表（确保结构与代码完全匹配）
 DROP TABLE IF EXISTS order_status_log;
-DROP TABLE IF EXISTS table_status_log;
 DROP TABLE IF EXISTS order_detail;
 DROP TABLE IF EXISTS orders;
 DROP TABLE IF EXISTS dish;
@@ -114,28 +113,14 @@ CREATE TABLE IF NOT EXISTS table_info (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(50) NOT NULL COMMENT '桌台名称/编号',
     capacity INT DEFAULT 4 COMMENT '可容纳人数',
-    status INT DEFAULT 0 COMMENT '状态: 0空闲/1占用/2预订',
+    status INT DEFAULT 0 COMMENT '状态: 0空闲/1占用',
     version INT DEFAULT 0 COMMENT '乐观锁版本号',
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) COMMENT '桌台信息';
 
 -- ============================================
--- 10. 桌台状态变更日志表（审计）
--- ============================================
-CREATE TABLE IF NOT EXISTS table_status_log (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    table_id BIGINT NOT NULL COMMENT '桌台ID',
-    from_status INT COMMENT '变更前状态',
-    to_status INT COMMENT '变更后状态',
-    operator_id BIGINT COMMENT '操作人ID',
-    create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_table_id (table_id),
-    INDEX idx_create_time (create_time)
-) COMMENT '桌台状态变更日志';
-
--- ============================================
--- 11. 订单状态变更日志表（审计）
+-- 10. 订单状态变更日志表（审计，营业额统计依据）
 -- ============================================
 CREATE TABLE IF NOT EXISTS order_status_log (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

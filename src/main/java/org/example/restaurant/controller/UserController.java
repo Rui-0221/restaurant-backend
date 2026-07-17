@@ -7,73 +7,29 @@ import org.example.restaurant.common.JwtUtil;
 import org.example.restaurant.common.Result;
 import org.example.restaurant.dto.UserAddDTO;
 import org.example.restaurant.dto.UserLoginDTO;
-import org.example.restaurant.dto.UserUpdateDTO;
 import org.example.restaurant.entity.User;
 import org.example.restaurant.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 
-import java.util.List;
-
-
 @RestController
 @RequestMapping("/users")
-@Tag(name = "用户管理（顾客端）", description = "顾客账号CRUD + 注册登录，用于扫码点餐场景")
+@Tag(name = "用户管理（顾客端）", description = "顾客注册/登录/查个人信息，用于扫码点餐场景")
 public class UserController {
 
     @Autowired
     private UserService userService;
 
-    @GetMapping
-    @Operation(summary = "查询所有用户", description = "获取用户列表")
-    public Result<List<User>> list(){
-        return Result.success(userService.list());
-    }
-
     @GetMapping("/{id}")
-    @Operation(summary = "查询单个用户", description = "根据ID获取用户信息")
+    @Operation(summary = "查询个人信息", description = "根据ID获取用户信息")
     public Result<User> getById(@PathVariable Long id){
         return Result.success(userService.getById(id));
-    }
-
-    @PostMapping
-    @Operation(summary = "新增用户", description = "添加新用户")
-    public Result<String> add(@Valid @RequestBody UserAddDTO dto){
-        User user = new User();
-        user.setName(dto.getName());
-        user.setPassword(dto.getPassword());
-        user.setPhone(dto.getPhone());
-        user.setSex(dto.getSex());
-        user.setAvatar(dto.getAvatar());
-        userService.add(user);
-        return Result.success("添加成功");
-    }
-
-    @PutMapping
-    @Operation(summary = "修改用户", description = "更新用户信息")
-    public Result<String> update(@Valid @RequestBody UserUpdateDTO dto){
-        User user = new User();
-        user.setId(dto.getId());
-        user.setName(dto.getName());
-        user.setPhone(dto.getPhone());
-        user.setSex(dto.getSex());
-        user.setAvatar(dto.getAvatar());
-        userService.update(user);
-        return Result.success("修改成功");
-    }
-
-    @DeleteMapping("/{id}")
-    @Operation(summary = "删除用户", description = "根据ID删除用户")
-    public Result<String> deleteById(@PathVariable Long id){
-        userService.deleteById(id);
-        return Result.success("删除成功");
     }
 
     @PostMapping("/login")
     @Operation(summary="用户登录",description = "手机号+密码登录")
     public Result<String> login(@Valid @RequestBody UserLoginDTO dto){
-
         //使用dto获取参数
         //调用service验证登录
         User user=userService.login(dto.getPhone(),dto.getPassword());

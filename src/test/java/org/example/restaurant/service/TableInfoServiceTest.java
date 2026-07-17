@@ -80,24 +80,6 @@ class TableInfoServiceTest {
         assertEquals(2, updated.getVersion(), "版本号应累加到2");
     }
 
-    @Test
-    void shouldTransitionFromIdleToReserved() {
-        // 0空闲 → 2预订
-        tableInfoService.updateStatus(testTableId, 2);
-
-        TableInfo updated = tableInfoService.getById(testTableId);
-        assertEquals(2, updated.getStatus(), "桌台应变更为预订");
-    }
-
-    @Test
-    void shouldTransitionFromReservedToOccupied() {
-        tableInfoService.updateStatus(testTableId, 2); // 0→2
-        tableInfoService.updateStatus(testTableId, 1); // 2→1
-
-        TableInfo updated = tableInfoService.getById(testTableId);
-        assertEquals(1, updated.getStatus(), "预订桌台应可转为占用");
-    }
-
     // ==================== 非法状态流转 ====================
 
     @Test
@@ -113,10 +95,10 @@ class TableInfoServiceTest {
     void shouldThrowWhenOccupiedToReserved() {
         tableInfoService.updateStatus(testTableId, 1); // 0→1
 
-        // 1占用 → 2预订（非法：已被占用不能再预订）
+        // 1占用 → 2（非法：占用状态只能回到0空闲）
         assertThrows(BusinessException.class, () ->
                 tableInfoService.updateStatus(testTableId, 2),
-                "占用→预订为非法流转"
+                "占用→非法状态应拒绝"
         );
     }
 
@@ -152,7 +134,7 @@ class TableInfoServiceTest {
         tableInfoService.updateStatus(testTableId, 0);
         assertEquals(2, tableInfoService.getById(testTableId).getVersion());
 
-        tableInfoService.updateStatus(testTableId, 2);
+        tableInfoService.updateStatus(testTableId, 1);
         assertEquals(3, tableInfoService.getById(testTableId).getVersion());
     }
 

@@ -9,18 +9,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.util.List;
 
 @Service
 public class UserServiceImpl implements UserService {
 
     @Autowired
     private UserMapper userMapper;
-
-    @Override
-    public List<User> list(){
-        return userMapper.findAll();
-    }
 
     @Override
     public User getById(Long id){
@@ -32,27 +26,7 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
-    public void add(User user){
-        //与register()一致：BCrypt加密密码后再入库
-        user.setPassword(PasswordEncoderUtil.encode(user.getPassword()));
-        user.setCreateTime(LocalDateTime.now());
-        userMapper.insert(user);
-    }
-
-    @Override
-    public void update(User user){
-        // 密码通过 register 或专门的密码修改接口处理，此处不更新密码字段
-        user.setPassword(null);
-        userMapper.update(user);
-    }
-
-    @Override
-    public void deleteById(Long id){
-        userMapper.deleteById(id);
-    }
-
-    @Override
-    public User login(String phone,String password){
+    public User login(String phone, String password){
         //1,根据手机号查询用户
         User user = userMapper.findByPhone(phone);
         if(user==null||!PasswordEncoderUtil.matches(password,user.getPassword())){

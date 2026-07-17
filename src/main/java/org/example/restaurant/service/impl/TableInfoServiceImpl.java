@@ -1,18 +1,14 @@
 package org.example.restaurant.service.impl;
 
 import org.example.restaurant.common.BusinessException;
-import org.example.restaurant.common.UserContext;
 import org.example.restaurant.entity.TableInfo;
-import org.example.restaurant.entity.TableStatusLog;
 import org.example.restaurant.mapper.TableInfoMapper;
-import org.example.restaurant.mapper.TableStatusLogMapper;
 import org.example.restaurant.service.TableInfoService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -20,9 +16,6 @@ public class TableInfoServiceImpl implements TableInfoService {
 
     @Autowired
     private TableInfoMapper tableInfoMapper;
-
-    @Autowired
-    private TableStatusLogMapper statusLogMapper;
 
     @Override
     public List<TableInfo> list() {
@@ -55,7 +48,7 @@ public class TableInfoServiceImpl implements TableInfoService {
 
     /**
      * CAS 乐观锁防并发 — 规划 Day1 核心实现
-     * 状态流转规则：0空闲→1占用/2预订；1占用→0空闲；2预订→0空闲/1占用
+     * 状态流转规则：0空闲→1占用；1占用→0空闲
      */
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -77,11 +70,6 @@ public class TableInfoServiceImpl implements TableInfoService {
         if (rows == 0) {
             throw new BusinessException("桌台状态已被其他操作变更，请刷新后重试");
         }
-
-        // 记录审计日志
-        Long operatorId = UserContext.getEmployeeId();
-        TableStatusLog log = new TableStatusLog(id, oldStatus, newStatus, operatorId, LocalDateTime.now());
-        statusLogMapper.insert(log);
     }
 
     /**
@@ -89,12 +77,10 @@ public class TableInfoServiceImpl implements TableInfoService {
      */
     private boolean canTransition(Integer from, Integer to) {
         if (from == null || to == null) return false;
-        // 0空闲 → 1占用 或 2预订
-        if (from == 0) return to == 1 || to == 2;
+        // 0空闲 → 1占用
+        if (from == 0) return to == 1;
         // 1占用 → 0空闲
         if (from == 1) return to == 0;
-        // 2预订 → 0空闲 或 1占用
-        if (from == 2) return to == 0 || to == 1;
         return false;
     }
 }
