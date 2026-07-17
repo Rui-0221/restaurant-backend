@@ -24,7 +24,7 @@
 
 - **场景**：线下餐厅扫码点餐、后厨协作、收银结账
 - **类型**：简历核心后端项目，面试可深度讲解 15 分钟
-- **规模**：68 个 Java 源文件，10 个 Controller，21 个单元测试
+- **规模**：68 个 Java 源文件，8 个 Controller，21 个单元测试
 
 ---
 
@@ -52,7 +52,7 @@
 ┌─────────────────────────────────────────────────────────┐
 │                     Controller 层                       │
 │  Employee · User · TableInfo · Dish · Orders · Admin   │
-│  REST API (10个Controller) + WebSocket 端点             │
+│  REST API (8个Controller) + WebSocket 端点              │
 ├─────────────────────────────────────────────────────────┤
 │                     Interceptor 层                      │
 │  JwtInterceptor (员工认证+角色解析 → /employees, /orders, /admin) │
@@ -76,26 +76,24 @@
 
 ```
 src/main/java/org/example/restaurant/
-├── controller/              # REST API (10个)
-│   ├── EmployeeController       # 员工管理 + 登录
+├── controller/              # REST API (8个)
+│   ├── EmployeeController       # 员工管理 + 登录（写操作限管理员）
 │   ├── UserController           # 用户管理 + 注册登录
 │   ├── TableInfoController      # 桌台CRUD + 乐观锁状态变更
 │   ├── DishController           # 菜品CRUD + Redis缓存在售列表
 │   ├── CategoryController       # 分类CRUD
-│   ├── SetmealController        # 套餐CRUD
-│   ├── SetmealDishController    # 套餐菜品关联
 │   ├── OrdersController         # 订单CRUD + 扫码点餐 + 状态流转 + 活跃订单查询
 │   ├── OrderDetailController    # 订单明细
 │   └── AdminController          # 管理员统计（营业额）
-├── service/                 # 接口 (10个)
-├── service/impl/            # 实现 (10个)
+├── service/                 # 接口 (8个)
+├── service/impl/            # 实现 (8个)
 │   ├── OrdersServiceImpl        # ⭐核心：placeOrder + addItemsToOrder + updateOrderStatus
 │   ├── TableInfoServiceImpl     # ⭐乐观锁CAS + 状态流转校验
 │   ├── DishServiceImpl          # ⭐Redis Cache-Aside + 穿透防护
 │   ├── PrintServiceImpl         # ESC/POS格式小票（首次+加菜）
 │   └── ...
-├── mapper/                  # MyBatis 注解式数据访问 (11个)
-├── entity/                  # 数据库实体 (11个)
+├── mapper/                  # MyBatis 注解式数据访问 (9个)
+├── entity/                  # 数据库实体 (9个)
 ├── dto/                     # 请求/响应对象 (4个)
 ├── interceptor/             # JWT拦截器 (2个)
 ├── config/                  # 配置类 (4个)
@@ -396,15 +394,15 @@ Authorization: Bearer <服务员Token>  // role=2
 
 ### 👥 员工管理
 
-| 方法 | 路径 | 说明 | 认证 |
-|------|------|------|:--:|
-| POST | `/employees/login` | 员工登录，返回含角色的JWT | ❌ |
-| GET | `/employees` | 查询员工列表 | ✅ |
-| GET | `/employees/{id}` | 查询单个员工 | ✅ |
-| POST | `/employees` | 新增员工 | ✅ |
-| PUT | `/employees` | 修改员工信息 | ✅ |
-| PUT | `/employees/password` | 修改密码 | ✅ |
-| DELETE | `/employees/{id}` | 删除员工 | ✅ |
+| 方法 | 路径 | 说明 | 认证 | 权限 |
+|------|------|------|:--:|:--:|
+| POST | `/employees/login` | 员工登录，返回含角色的JWT | ❌ | — |
+| GET | `/employees` | 查询员工列表 | ✅ | 全员 |
+| GET | `/employees/{id}` | 查询单个员工 | ✅ | 全员 |
+| POST | `/employees` | 新增员工 | ✅ | 🔒管理员 |
+| PUT | `/employees` | 修改员工信息 | ✅ | 🔒管理员 |
+| PUT | `/employees/password` | 修改密码 | ✅ | 全员 |
+| DELETE | `/employees/{id}` | 删除员工 | ✅ | 🔒管理员 |
 
 **登录请求**:
 ```json
@@ -442,7 +440,14 @@ POST /employees/login
 }
 ```
 
-**实现**: `SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE status = 5 AND DATE(create_time) = CURDATE()`
+**实现**: 通过 `order_status_log` 表统计今日结账的订单金额，确保跨日订单按实际结账时间计入：
+
+```sql
+SELECT COALESCE(SUM(o.total_amount), 0)
+FROM orders o
+JOIN order_status_log l ON o.id = l.order_id
+WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
+```
 
 ---
 
@@ -562,6 +567,7 @@ POST /employees/login
 | `/users/**` | 用户端路径，由 UserJwtInterceptor 处理 |
 | `/orders/scan-order` | 扫码点餐，顾客和员工均可访问 |
 | `/orders/table/**` | 查询桌台活跃订单，顾客扫码后使用 |
+| `/dishes/on-sale` | 顾客扫码后浏览在售菜品 |
 | `/swagger-ui/**`, `/v3/api-docs/**`, `/doc.html`, `/webjars/**` | API 文档 |
 | `/ws/**` | WebSocket 连接（握手时自行校验 JWT） |
 | `/error` | Spring 错误页 |
@@ -686,6 +692,7 @@ OrdersServiceImpl → PrintService (接口)
 | 双 Token 类型隔离 | JWT 含 type claim（employee/user），拦截器交叉校验 | 防止用户 token 越权访问员工接口，反之亦然 |
 | JWT 过期 | Token 有效期 2 小时 | 限制泄露 Token 影响时间 |
 | 角色权限 | JWT 含 role + 业务层二次校验 | 防止越权操作 |
+| 员工管理写操作鉴权 | 增删改员工时 Controller 层校验 role==1 | 防止服务员/后厨越权管理员工 |
 | 桌台并发 | CAS 乐观锁（version + WHERE 条件） | 防止重复占用 |
 | 加菜并发 | SELECT FOR UPDATE 行锁 | 防止丢失更新 |
 | 异常统一处理 | GlobalExceptionHandler | 不泄露内部错误细节 |

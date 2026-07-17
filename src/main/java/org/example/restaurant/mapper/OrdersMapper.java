@@ -41,7 +41,9 @@ public interface OrdersMapper {
     @Update("UPDATE orders SET total_amount = #{totalAmount} WHERE id = #{id}")
     void updateTotalAmount(@Param("id") Long id, @Param("totalAmount") java.math.BigDecimal totalAmount);
 
-    @Select("SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE status = 5 AND DATE(create_time) = CURDATE()")
+    @Select("SELECT COALESCE(SUM(o.total_amount), 0) FROM orders o " +
+            "INNER JOIN order_status_log l ON o.id = l.order_id " +
+            "WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()")
     java.math.BigDecimal todayRevenue();
 
     @Delete("DELETE FROM orders WHERE id=#{id}")

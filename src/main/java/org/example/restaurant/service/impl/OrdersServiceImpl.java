@@ -124,10 +124,12 @@ public class OrdersServiceImpl implements OrdersService {
     private OrderVO createNewOrder(ScanOrderDTO dto) {
         // 1. 占用桌台（乐观锁防并发）
         //    如果桌台已空闲(0)，则占用(1)；如果已预订(2)，也转为占用(1)
+        boolean tableOccupiedByMe = false;
         TableInfo table = tableInfoService.getById(dto.getTableId());
         if (table.getStatus() == 0 || table.getStatus() == 2) {
             try {
                 tableInfoService.updateStatus(dto.getTableId(), 1);
+                tableOccupiedByMe = true;
             } catch (BusinessException e) {
                 // CAS冲突：另一请求已抢先占用桌台并创建了订单 → 自动转为加菜
                 List<Orders> activeOrders = ordersMapper.findActiveByTableId(dto.getTableId());
@@ -144,43 +146,55 @@ public class OrdersServiceImpl implements OrdersService {
             log.warn("桌台 {} 状态为占用(1)但无活跃订单，继续创建", dto.getTableId());
         }
 
-        // 2. 校验菜品并后端重算金额
-        DishAndDetail result = validateAndBuildDetails(dto.getItems());
+        // 2-4. 校验菜品 + 创建订单 + 明细（失败时需回滚桌台占用）
+        try {
+            DishAndDetail result = validateAndBuildDetails(dto.getItems());
 
-        // 3. 插入订单（状态=1 待制作）
-        Orders order = new Orders();
-        order.setTableId(dto.getTableId());
-        order.setUserId(dto.getUserId());
-        order.setTotalAmount(result.total);
-        order.setStatus(1);
-        order.setCreateTime(LocalDateTime.now());
-        ordersMapper.insert(order);
+            // 3. 插入订单（状态=1 待制作）
+            Orders order = new Orders();
+            order.setTableId(dto.getTableId());
+            order.setUserId(dto.getUserId());
+            order.setTotalAmount(result.total);
+            order.setStatus(1);
+            order.setCreateTime(LocalDateTime.now());
+            ordersMapper.insert(order);
 
-        // 4. 批量插入订单明细
-        List<OrderDetail> details = result.details;
-        details.forEach(d -> d.setOrderId(order.getId()));
-        orderDetailMapper.batchInsert(details);
+            // 4. 批量插入订单明细
+            List<OrderDetail> details = result.details;
+            details.forEach(d -> d.setOrderId(order.getId()));
+            orderDetailMapper.batchInsert(details);
 
-        // 5. 事务提交后再执行外部I/O（打印、WebSocket），避免占用数据库连接
-        TransactionSynchronizationManager.registerSynchronization(
-                new TransactionSynchronization() {
-                    @Override
-                    public void afterCommit() {
-                        try {
-                            printService.printOrder(order, details);
-                        } catch (Exception e) {
-                            log.error("打印小票失败", e);
+            // 5. 事务提交后再执行外部I/O（打印、WebSocket），避免占用数据库连接
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            try {
+                                printService.printOrder(order, details);
+                            } catch (Exception e) {
+                                log.error("打印小票失败", e);
+                            }
+
+                            try {
+                                kitchenWebSocketHandler.notifyNewOrder(order.getId(), dto.getTableId(), details.size());
+                            } catch (Exception e) {
+                                log.error("WebSocket 通知失败", e);
+                            }
                         }
+                    });
 
-                        try {
-                            kitchenWebSocketHandler.notifyNewOrder(order.getId(), dto.getTableId(), details.size());
-                        } catch (Exception e) {
-                            log.error("WebSocket 通知失败", e);
-                        }
-                    }
-                });
-
-        return OrderVO.from(order, details, result.dishNameMap);
+            return OrderVO.from(order, details, result.dishNameMap);
+        } catch (Exception e) {
+            // 订单创建失败：如果本请求已占用桌台，需释放，避免桌台卡死
+            if (tableOccupiedByMe) {
+                try {
+                    tableInfoService.updateStatus(dto.getTableId(), 0);
+                } catch (Exception releaseEx) {
+                    log.error("订单创建失败后释放桌台失败: tableId={}", dto.getTableId(), releaseEx);
+                }
+            }
+            throw e;
+        }
     }
 
     /**

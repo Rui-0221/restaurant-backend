@@ -28,7 +28,7 @@ public  interface UserMapper {
     void insert(User user);
 
     @Update("UPDATE `user` SET name=#{name},phone=#{phone}," +
-            "sex=#{sex},avatar=#{avatar},create_time=#{createTime} WHERE id=#{id}")
+            "sex=#{sex},avatar=#{avatar} WHERE id=#{id}")
     void update(User user);
 
     @Delete("DELETE FROM `user` WHERE id=#{id}")

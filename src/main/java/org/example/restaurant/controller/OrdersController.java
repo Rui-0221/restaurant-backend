@@ -78,9 +78,9 @@ public class OrdersController {
                       "金额由后端强制重算，不信任前端。同一桌多人扫码、中途加菜都走此接口")
     public Result<OrderVO> scanOrder(@Valid @RequestBody ScanOrderDTO dto) {
         // 用户认证后使用上下文中的 userId，防止伪造
-        if (UserContext.getUserId() != null) {
-            dto.setUserId(UserContext.getUserId());
-        }
+        // 防止伪造：始终使用认证上下文中的 userId，不信任前端传入
+        // 员工扫码时 userId 为 null（代表员工代客点餐），用户扫码时为真实用户 id
+        dto.setUserId(UserContext.getUserId());
         OrderVO vo = ordersService.placeOrder(dto);
         return Result.success(vo);
     }

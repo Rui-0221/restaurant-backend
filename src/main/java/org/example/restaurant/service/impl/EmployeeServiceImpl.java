@@ -79,11 +79,16 @@ public class EmployeeServiceImpl implements EmployeeService {
         if(existing==null){
             throw new BusinessException("员工不存在");
         }
-        // 密码通过 updatePassword 专用方法修改，此处不更新密码字段
-        employee.setPassword(null);
-        employee.setUpdateTime(LocalDateTime.now());
+        // 合并字段：只更新非 null 的字段，避免清空 role/status 等
+        if (employee.getUsername() != null) existing.setUsername(employee.getUsername());
+        if (employee.getName() != null) existing.setName(employee.getName());
+        if (employee.getPhone() != null) existing.setPhone(employee.getPhone());
+        if (employee.getStatus() != null) existing.setStatus(employee.getStatus());
+        if (employee.getRole() != null) existing.setRole(employee.getRole());
+        // 密码通过 updatePassword 专用方法修改，此处不更新
+        existing.setUpdateTime(LocalDateTime.now());
 
-        employeeMapper.update(employee);
+        employeeMapper.update(existing);
     }
 
     @Override

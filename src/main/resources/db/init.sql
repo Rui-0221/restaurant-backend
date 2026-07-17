@@ -16,8 +16,6 @@ DROP TABLE IF EXISTS order_status_log;
 DROP TABLE IF EXISTS table_status_log;
 DROP TABLE IF EXISTS order_detail;
 DROP TABLE IF EXISTS orders;
-DROP TABLE IF EXISTS setmeal_dish;
-DROP TABLE IF EXISTS setmeal;
 DROP TABLE IF EXISTS dish;
 DROP TABLE IF EXISTS category;
 DROP TABLE IF EXISTS user;
@@ -83,34 +81,7 @@ CREATE TABLE IF NOT EXISTS dish (
 ) COMMENT '菜品表';
 
 -- ============================================
--- 5. 套餐表
--- ============================================
-CREATE TABLE IF NOT EXISTS setmeal (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL COMMENT '套餐名称',
-    category_id BIGINT NOT NULL COMMENT '分类ID',
-    price DECIMAL(10,2) NOT NULL COMMENT '套餐价格',
-    image VARCHAR(255) COMMENT '图片URL',
-    description VARCHAR(500) COMMENT '描述',
-    status INT DEFAULT 1 COMMENT '状态: 1在售/0下架',
-    create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_category (category_id)
-) COMMENT '套餐表';
-
--- ============================================
--- 6. 套餐-菜品关联表
--- ============================================
-CREATE TABLE IF NOT EXISTS setmeal_dish (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    setmeal_id BIGINT NOT NULL COMMENT '套餐ID',
-    dish_id BIGINT NOT NULL COMMENT '菜品ID',
-    copies INT NOT NULL DEFAULT 1 COMMENT '份数',
-    INDEX idx_setmeal (setmeal_id)
-) COMMENT '套餐-菜品关联表';
-
--- ============================================
--- 7. 订单表
+-- 5. 订单表
 -- ============================================
 CREATE TABLE IF NOT EXISTS orders (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -131,7 +102,6 @@ CREATE TABLE IF NOT EXISTS order_detail (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     order_id BIGINT NOT NULL COMMENT '订单ID',
     dish_id BIGINT NOT NULL COMMENT '菜品ID',
-    setmeal_id BIGINT COMMENT '套餐ID(点套餐时使用)',
     amount INT NOT NULL DEFAULT 1 COMMENT '数量',
     price DECIMAL(10,2) NOT NULL COMMENT '下单时的单价(数据快照)',
     INDEX idx_order (order_id)
@@ -194,8 +164,7 @@ INSERT INTO category (type, name, sort, status) VALUES
 (1, '热菜', 1, 1),
 (1, '凉菜', 2, 1),
 (1, '汤类', 3, 1),
-(1, '饮料', 4, 1),
-(2, '双人套餐', 5, 1)
+(1, '饮料', 4, 1)
 ON DUPLICATE KEY UPDATE name=VALUES(name);
 
 -- 插入测试菜品

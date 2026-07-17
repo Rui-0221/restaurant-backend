@@ -5,6 +5,7 @@ import java.util.HashMap;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.example.restaurant.common.BusinessException;
 import org.example.restaurant.common.JwtUtil;
 import org.example.restaurant.common.Result;
 import org.example.restaurant.common.UserContext;
@@ -51,8 +52,11 @@ public class EmployeeController {
         //String token= UUID.randomUUID().toString();
         //token 的作用：身份凭证:UUID这个包可以生成唯一的标识码
         //使用JWT生成token（含角色信息）
-        Integer role = emp.getRole() != null ? emp.getRole() : 1;
-        String token= JwtUtil.generateToken(emp.getId(), role);
+        // role 为 null 说明数据异常（如被 update 清空），拒绝登录避免越权
+        if (emp.getRole() == null) {
+            throw new BusinessException("账号角色未配置，请联系管理员");
+        }
+        String token= JwtUtil.generateToken(emp.getId(), emp.getRole());
         //UUID ：像一张没有名字、没有有效期的门禁卡，每次进门都要查登记本。
         //JWT ：像一张写着你名字、有有效期的智能门禁卡，保安看一眼就知道你是谁。
         //替换后，系统会更安全、更高效
@@ -69,6 +73,11 @@ public class EmployeeController {
     @PostMapping
     @Operation(summary = "新增员工",description = "添加新员工")
     public Result<String> add(@Valid @RequestBody EmployeeAddDTO dto){
+        // 仅管理员可操作员工账号
+        Integer role = UserContext.getRole();
+        if (role == null || role != 1) {
+            throw new BusinessException("仅管理员可操作员工账号");
+        }
         Employee employee = new Employee();
         employee.setUsername(dto.getUsername());
         employee.setPassword(dto.getPassword());
@@ -83,6 +92,11 @@ public class EmployeeController {
     @PutMapping
     @Operation(summary = "修改员工", description = "更新员工信息")
     public Result<String> update(@Valid @RequestBody EmployeeUpdateDTO dto){
+        // 仅管理员可操作员工账号
+        Integer role = UserContext.getRole();
+        if (role == null || role != 1) {
+            throw new BusinessException("仅管理员可操作员工账号");
+        }
         Employee employee = new Employee();
         employee.setId(dto.getId());
         employee.setUsername(dto.getUsername());
@@ -97,6 +111,11 @@ public class EmployeeController {
     @DeleteMapping("/{id}")
     @Operation(summary = "删除员工",description = "根据ID删除员工")
     public Result<String> deleteById(@PathVariable Long id){
+        // 仅管理员可操作员工账号
+        Integer role = UserContext.getRole();
+        if (role == null || role != 1) {
+            throw new BusinessException("仅管理员可操作员工账号");
+        }
         employeeService.deleteById(id);
         return Result.success("删除成功");
     }
