@@ -4,14 +4,18 @@ import org.example.restaurant.dto.OrderVO;
 import org.example.restaurant.dto.ScanOrderDTO;
 import org.example.restaurant.entity.Orders;
 
-import java.util.List;
+import java.util.Map;
 
 public interface OrdersService {
-    List<Orders> list();
+    /**
+     * 分页查询订单列表
+     * @param page 页码（从1开始）
+     * @param size 每页条数
+     * @return 包含 list（当前页数据）、total（总条数）、page、size 的 Map
+     */
+    Map<String, Object> list(Integer page, Integer size);
+
     Orders getById(Long id);
-    void add(Orders orders);
-    void update(Orders orders);
-    void deleteById(Long id);
 
     /**
      * 查询桌台的活跃订单（状态1-4），无活跃订单时返回null

@@ -230,14 +230,12 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/orders` | 查询所有订单 |
+| GET | `/orders?page=1&size=20` | 分页查询订单（按创建时间倒序） |
 | GET | `/orders/{id}` | 查询单个订单 |
-| POST | `/orders` | 简单新增（CRUD，无业务逻辑） |
-| PUT | `/orders` | 修改订单 |
-| DELETE | `/orders/{id}` | 删除订单 |
 | **POST** | **`/orders/scan-order`** | **🔑 扫码点餐（核心接口）** |
 | **GET** | **`/orders/table/{tableId}/active`** | **查询桌台活跃订单** |
 | **PUT** | **`/orders/{id}/status?status=2`** | **订单状态流转** |
+| **GET** | **`/orders/statistics/today`** | **今日营业额（仅管理员）** |
 
 #### 🔑 扫码点餐 `POST /orders/scan-order`
 
@@ -571,7 +569,7 @@ WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
 
 | 覆盖路径 | 说明 |
 |------|------|
-| `/users/**` | 用户信息查询（注册/登录已放行） |
+| `/users/**` | 查询个人信息 `/users/me`（注册/登录已放行） |
 | `/orders/scan-order` | 扫码点餐 |
 | `/orders/table/**` | 查询桌台活跃订单 |
 
@@ -675,6 +673,8 @@ mvn test
 | JWT 过期 | Token 有效期 2 小时 | 限制泄露 Token 影响时间 |
 | 角色权限 | JWT 含 role + 业务层二次校验 | 防止越权操作 |
 | 员工管理写操作鉴权 | 增删改员工时 Controller 层校验 role==1 | 防止服务员/后厨越权管理员工 |
+| 用户信息查询防越权 | `GET /users/me` 从 JWT token 提取 userId，不接受前端传 ID | 防止用户查他人信息 |
+| 订单列表分页 | `LIMIT offset, size` + 参数校验（size 上限 100） | 防止全量返回导致内存/网络压力 |
 | 桌台并发 | CAS 乐观锁（version + WHERE 条件） | 防止重复占用 |
 | 加菜并发 | SELECT FOR UPDATE 行锁 | 防止丢失更新 |
 | 异常统一处理 | GlobalExceptionHandler | 不泄露内部错误细节 |

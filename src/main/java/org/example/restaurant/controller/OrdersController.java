@@ -15,7 +15,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -26,39 +25,20 @@ public class OrdersController {
     @Autowired
     private OrdersService ordersService;
 
-    // ==================== 基础 CRUD ====================
+    // ==================== 基础查询 ====================
 
     @GetMapping
-    @Operation(summary = "查询所有订单", description = "获取订单列表")
-    public Result<List<Orders>> list(){
-        return Result.success(ordersService.list());
+    @Operation(summary = "分页查询订单", description = "按创建时间倒序分页查询订单。参数：page(页码,从1开始,默认1)、size(每页条数,默认20,最大100)")
+    public Result<Map<String, Object>> list(
+            @RequestParam(defaultValue = "1") Integer page,
+            @RequestParam(defaultValue = "20") Integer size){
+        return Result.success(ordersService.list(page, size));
     }
 
     @GetMapping("/{id}")
     @Operation(summary = "查询单个订单", description = "根据ID获取订单信息")
     public Result<Orders> getById(@PathVariable Long id){
         return Result.success(ordersService.getById(id));
-    }
-
-    @PostMapping
-    @Operation(summary = "新增订单", description = "添加新订单（简单CRUD，不含业务逻辑）")
-    public Result<String> add(@Valid @RequestBody Orders orders){
-        ordersService.add(orders);
-        return Result.success("添加成功");
-    }
-
-    @PutMapping
-    @Operation(summary = "修改订单", description = "更新订单信息")
-    public Result<String> update(@Valid @RequestBody Orders orders){
-        ordersService.update(orders);
-        return Result.success("修改成功");
-    }
-
-    @DeleteMapping("/{id}")
-    @Operation(summary = "删除订单", description = "根据ID删除订单")
-    public Result<String> deleteById(@PathVariable Long id){
-        ordersService.deleteById(id);
-        return Result.success("删除成功");
     }
 
     // ==================== 核心业务接口 ====================

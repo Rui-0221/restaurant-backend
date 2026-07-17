@@ -5,6 +5,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.example.restaurant.common.JwtUtil;
 import org.example.restaurant.common.Result;
+import org.example.restaurant.common.UserContext;
 import org.example.restaurant.dto.UserAddDTO;
 import org.example.restaurant.dto.UserLoginDTO;
 import org.example.restaurant.entity.User;
@@ -21,10 +22,14 @@ public class UserController {
     @Autowired
     private UserService userService;
 
-    @GetMapping("/{id}")
-    @Operation(summary = "查询个人信息", description = "根据ID获取用户信息")
-    public Result<User> getById(@PathVariable Long id){
-        return Result.success(userService.getById(id));
+    @GetMapping("/me")
+    @Operation(summary = "查询个人信息", description = "从JWT token中提取当前登录用户的ID，返回个人信息。用户只能查自己")
+    public Result<User> getCurrentUser(){
+        Long userId = UserContext.getUserId();
+        if (userId == null) {
+            throw new org.example.restaurant.common.BusinessException("未登录");
+        }
+        return Result.success(userService.getById(userId));
     }
 
     @PostMapping("/login")

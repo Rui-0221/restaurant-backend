@@ -47,11 +47,24 @@ public class OrdersServiceImpl implements OrdersService {
     @Autowired
     private KitchenWebSocketHandler kitchenWebSocketHandler;
 
-    // ==================== 基础 CRUD ====================
+    // ==================== 基础查询 ====================
 
     @Override
-    public List<Orders> list() {
-        return ordersMapper.list();
+    public Map<String, Object> list(Integer page, Integer size) {
+        // 参数校验，防止恶意请求
+        if (page == null || page < 1) page = 1;
+        if (size == null || size < 1 || size > 100) size = 20;
+        int offset = (page - 1) * size;
+
+        List<Orders> orders = ordersMapper.listPage(offset, size);
+        Long total = ordersMapper.count();
+
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put("list", orders);
+        result.put("total", total);
+        result.put("page", page);
+        result.put("size", size);
+        return result;
     }
 
     @Override
@@ -67,22 +80,6 @@ public class OrdersServiceImpl implements OrdersService {
     public Orders getActiveOrderByTable(Long tableId) {
         List<Orders> activeOrders = ordersMapper.findActiveByTableId(tableId);
         return (activeOrders != null && !activeOrders.isEmpty()) ? activeOrders.get(0) : null;
-    }
-
-    @Override
-    public void add(Orders orders) {
-        orders.setCreateTime(LocalDateTime.now());
-        ordersMapper.insert(orders);
-    }
-
-    @Override
-    public void update(Orders orders) {
-        ordersMapper.update(orders);
-    }
-
-    @Override
-    public void deleteById(Long id) {
-        ordersMapper.deleteById(id);
     }
 
     // ==================== 扫码点餐（改造版：首次点餐 OR 加菜）====================

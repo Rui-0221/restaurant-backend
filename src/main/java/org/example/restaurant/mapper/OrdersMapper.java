@@ -9,8 +9,11 @@ import java.util.List;
 @Mapper
 public interface OrdersMapper {
 
-    @Select("SELECT * FROM orders")
-    List<Orders> list();
+    @Select("SELECT * FROM orders ORDER BY create_time DESC LIMIT #{offset}, #{size}")
+    List<Orders> listPage(@Param("offset") int offset, @Param("size") int size);
+
+    @Select("SELECT COUNT(*) FROM orders")
+    Long count();
 
     @Select("SELECT * FROM orders WHERE id=#{id}")
     Orders findById(Long id);
@@ -19,9 +22,6 @@ public interface OrdersMapper {
             "VALUES(#{userId}, #{tableId}, #{status}, #{totalAmount}, #{createTime})")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     void insert(Orders orders);
-
-    @Update("UPDATE orders SET user_id=#{userId}, table_id=#{tableId}, status=#{status}, total_amount=#{totalAmount} WHERE id=#{id}")
-    void update(Orders orders);
 
     @Update("UPDATE orders SET status=#{status} WHERE id=#{id}")
     void updateStatus(@Param("id") Long id, @Param("status") Integer status);
@@ -46,6 +46,4 @@ public interface OrdersMapper {
             "WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()")
     java.math.BigDecimal todayRevenue();
 
-    @Delete("DELETE FROM orders WHERE id=#{id}")
-    void deleteById(Long id);
 }
