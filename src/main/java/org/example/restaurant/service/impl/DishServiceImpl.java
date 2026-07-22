@@ -7,6 +7,8 @@ import org.example.restaurant.common.BusinessException;
 import org.example.restaurant.entity.Dish;
 import org.example.restaurant.mapper.DishMapper;
 import org.example.restaurant.service.DishService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -18,6 +20,8 @@ import java.util.List;
 
 @Service
 public class DishServiceImpl implements DishService {
+
+    private static final Logger log = LoggerFactory.getLogger(DishServiceImpl.class);
 
     private static final String CACHE_KEY_ON_SALE = "dish:onSale";
     private static final Duration CACHE_TTL = Duration.ofHours(1);
@@ -84,24 +88,36 @@ public class DishServiceImpl implements DishService {
      */
     @Override
     public List<Dish> listOnSale() {
-        // 1. 查缓存
-        String cached = redisTemplate.opsForValue().get(CACHE_KEY_ON_SALE);
-        if (cached != null) {
-            // 缓存命中（包括缓存的空列表）
-            return deserializeDishList(cached);
+        // 1. 查缓存（Redis 不可用时降级直查数据库）
+        try {
+            String cached = redisTemplate.opsForValue().get(CACHE_KEY_ON_SALE);
+            if (cached != null) {
+                // 缓存命中（包括缓存的空列表）
+                return deserializeDishList(cached);
+            }
+        } catch (Exception e) {
+            log.warn("Redis 不可用，降级直查数据库", e);
         }
 
         // 2. 查数据库
         List<Dish> dishes = dishMapper.findOnSale();
 
-        // 3. 写入缓存（含穿透防护：空值也缓存，但TTL更短）
+        // 3. 写入缓存（Redis 不可用时跳过，不影响业务）
         if (dishes == null || dishes.isEmpty()) {
             // 缓存空列表短时间，防止缓存穿透
-            redisTemplate.opsForValue().set(CACHE_KEY_ON_SALE, EMPTY_MARKER, EMPTY_CACHE_TTL);
+            try {
+                redisTemplate.opsForValue().set(CACHE_KEY_ON_SALE, EMPTY_MARKER, EMPTY_CACHE_TTL);
+            } catch (Exception e) {
+                log.warn("Redis 写入空值缓存失败，跳过", e);
+            }
             return Collections.emptyList();
         } else {
-            String json = serializeDishList(dishes);
-            redisTemplate.opsForValue().set(CACHE_KEY_ON_SALE, json, CACHE_TTL);
+            try {
+                String json = serializeDishList(dishes);
+                redisTemplate.opsForValue().set(CACHE_KEY_ON_SALE, json, CACHE_TTL);
+            } catch (Exception e) {
+                log.warn("Redis 写入缓存失败，跳过", e);
+            }
             return dishes;
         }
     }
@@ -111,7 +127,11 @@ public class DishServiceImpl implements DishService {
      * 在 add / update / delete 菜品时调用
      */
     private void evictOnSaleCache() {
-        redisTemplate.delete(CACHE_KEY_ON_SALE);
+        try {
+            redisTemplate.delete(CACHE_KEY_ON_SALE);
+        } catch (Exception e) {
+            log.warn("Redis 清除缓存失败，跳过", e);
+        }
     }
 
     // ==================== JSON 序列化/反序列化工具 ====================

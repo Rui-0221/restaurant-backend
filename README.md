@@ -674,6 +674,7 @@ mvn test
 | 角色权限 | JWT 含 role + 业务层二次校验 | 防止越权操作 |
 | 员工管理写操作鉴权 | 增删改员工时 Controller 层校验 role==1 | 防止服务员/后厨越权管理员工 |
 | 用户信息查询防越权 | `GET /users/me` 从 JWT token 提取 userId，不接受前端传 ID | 防止用户查他人信息 |
+| 扫码点餐防冒名 | `placeOrder()` 用 `UserContext.getUserId()` 覆盖 DTO 中的 userId | 防止冒名下单 |
 | 订单列表分页 | `LIMIT offset, size` + 参数校验（size 上限 100） | 防止全量返回导致内存/网络压力 |
 | 桌台并发 | CAS 乐观锁（version + WHERE 条件） | 防止重复占用 |
 | 加菜并发 | SELECT FOR UPDATE 行锁 | 防止丢失更新 |

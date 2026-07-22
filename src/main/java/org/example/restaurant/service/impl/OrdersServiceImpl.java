@@ -95,6 +95,12 @@ public class OrdersServiceImpl implements OrdersService {
     @Override
     @Transactional
     public OrderVO placeOrder(ScanOrderDTO dto) {
+        // 0. 用 JWT 中的 userId 覆盖前端传的值，防止冒名下单
+        Long currentUser = UserContext.getUserId();
+        if (currentUser != null) {
+            dto.setUserId(currentUser);
+        }
+
         // 1. 检查该桌台是否有活跃订单
         List<Orders> activeOrders = ordersMapper.findActiveByTableId(dto.getTableId());
 
