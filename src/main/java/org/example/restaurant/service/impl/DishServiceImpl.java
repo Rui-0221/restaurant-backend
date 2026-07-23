@@ -3,6 +3,7 @@ package org.example.restaurant.service.impl;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import org.example.restaurant.common.BusinessException;
 import org.example.restaurant.entity.Dish;
 import org.example.restaurant.mapper.DishMapper;
@@ -23,11 +24,11 @@ public class DishServiceImpl implements DishService {
 
     private static final Logger log = LoggerFactory.getLogger(DishServiceImpl.class);
 
-    private static final String CACHE_KEY_ON_SALE = "dish:onSale";
-    private static final Duration CACHE_TTL = Duration.ofHours(1);
-    private static final Duration EMPTY_CACHE_TTL = Duration.ofSeconds(60);
+    private static final String CACHE_KEY_ON_SALE = "dish:onSale"; // ← Redis 里的 Key 名
+    private static final Duration CACHE_TTL = Duration.ofHours(1); // ← 缓存过期时间 1 小时 
+    private static final Duration EMPTY_CACHE_TTL = Duration.ofSeconds(60); // ← 缓存空值过期时间 60 秒
     /** 缓存空值标记（与合法的JSON序列化结果区分，避免歧义） */
-    private static final String EMPTY_MARKER = "__EMPTY__";
+    private static final String EMPTY_MARKER = "__EMPTY__"; // ← 缓存空值标记
 
     @Autowired
     private DishMapper dishMapper;
@@ -35,7 +36,9 @@ public class DishServiceImpl implements DishService {
     @Autowired
     private StringRedisTemplate redisTemplate;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .findAndRegisterModules()
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS); // 禁用时间戳格式，改用 ISO 字符串（如 2026-07-16T16:27:00）
 
     @Override
     public List<Dish> list() {
