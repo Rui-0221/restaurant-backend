@@ -8,22 +8,26 @@ Spring Boot 3.2 + MyBatis restaurant backend — QR-code ordering, kitchen colla
 
 ## Build & run
 
+Uses Maven Wrapper (no local Maven install needed — `mvnw`/`mvnw.cmd` auto-downloads it):
+
 ```powershell
 # Compile
-mvn compile
+.\mvnw.cmd compile
 
 # Run (needs MySQL + Redis; configure DB/Redis passwords in src/main/resources/application-local.yml)
-mvn spring-boot:run
+.\mvnw.cmd spring-boot:run
 
-# Run all tests (they use @Transactional, auto-rollback)
-mvn test
+# Run all tests
+.\mvnw.cmd test
 
 # Run a single test class
-mvn test -Dtest="OrdersServiceTest"
+.\mvnw.cmd test -Dtest="OrdersServiceTest"
 
 # Run a single test method
-mvn test -Dtest="OrdersServiceTest#shouldCreateOrderAndLockTable"
+.\mvnw.cmd test -Dtest="OrdersServiceTest#shouldCreateOrderAndLockTable"
 ```
+
+Note: tests are NOT @Transactional — `TableInfoServiceImpl.updateStatus` uses REQUIRES_NEW (CAS retry), so test data must commit to be visible; both test classes clean up their own data in `@AfterEach`.
 
 The app starts on `http://localhost:8080`. API docs at `/doc.html` (Knife4j).
 
@@ -48,11 +52,9 @@ The app starts on `http://localhost:8080`. API docs at `/doc.html` (Knife4j).
 
 **Scan-order is the core flow** (`OrdersServiceImpl.placeOrder`):
 1. Check if table has active order (status IN 1,2,3,4)
-2. No active → create order + occupy table (optimistic lock) + print full receipt + WebSocket notify
-3. Has active → add items (pessimistic lock on order row) + recalculate total + print add-items slip + WebSocket notify
+2. No active → create order + occupy table (optimistic lock) + WebSocket notify
+3. Has active → add items (pessimistic lock on order row) + recalculate total + WebSocket notify
 4. Prices are always recalculated from DB — the DTO has no `price` field
-
-**PrintService is an interface** — `PrintServiceImpl` currently logs to console; the interface exists so future implementations (USB, network printer) can be swapped without touching order business logic.
 
 **Global exception handling** — `BusinessException` thrown in service layer, caught by `GlobalExceptionHandler` (`@RestControllerAdvice`), returns `Result.error(msg)`.
 
@@ -61,8 +63,8 @@ The app starts on `http://localhost:8080`. API docs at `/doc.html` (Knife4j).
 - **Response format**: all endpoints return `Result<T>` — `{code: 1|0, msg: string, data: T}`. Use `Result.success(data)` / `Result.error(msg)`.
 - **MyBatis zero-XML**: all SQL in `@Select`/`@Insert`/`@Update`/`@Delete` annotations on mapper interfaces
 - **MyBatis config**: `map-underscore-to-camel-case: true` (DB `table_id` → Java `tableId`), SQL logging enabled via `StdOutImpl`
-- **Status enums**: orders 0-cancelled/1-pending/2-cooking/3-serving/4-dining/5-settled; tables 0-idle/1-occupied/2-reserved
-- **Role matrix**: 1-admin (full), 2-waiter (serve 2→3, checkout 4→5), 3-chef (start-cooking 1→2)
+- **Status enums**: orders 0-cancelled/1-pending/2-cooking/3-serving/4-dining/5-settled; tables 0-idle/1-occupied
+- **Role matrix**: 1-admin (full), 2-waiter (serve 2→3, dining 3→4, checkout 4→5), 3-chef (start-cooking 1→2)
 - **`application-local.yml`** is git-ignored (contains passwords) — each developer creates their own
 - **Database init script**: `src/main/resources/db/init.sql` — contains table DDL and seed data
 

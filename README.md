@@ -14,9 +14,9 @@
 顾客入座 → 扫桌上二维码 → 浏览在售菜品（Redis缓存）
          → 提交订单（后端强制重算金额）
          → 桌台自动占用（乐观锁防并发）
-         → 后厨实时收到通知（WebSocket推送）+ 打印小票
-         → 后厨开始制作(1→2) → 服务员上菜(2→3)
-         → 客人用餐中(4) → 中途加菜（再扫码自动追加）
+         → 后厨实时收到通知（WebSocket推送）
+         → 后厨开始制作(1→2) → 服务员上菜(2→3)、转入用餐中(3→4)
+         → 中途加菜（再扫码自动追加）
          → 服务员结账(4→5) → 桌台自动释放
 ```
 
@@ -24,7 +24,7 @@
 
 - **场景**：线下餐厅扫码点餐、后厨协作、收银结账
 - **类型**：简历核心后端项目，面试可深度讲解 15 分钟
-- **规模**：68 个 Java 源文件，8 个 Controller，21 个单元测试
+- **规模**：56 个 Java 源文件，6 个 Controller，28 个单元测试
 
 ---
 
@@ -61,7 +61,7 @@
 ├─────────────────────────────────────────────────────────┤
 │                     Service 层                          │
 │  核心业务: placeOrder(首次/加菜), updateOrderStatus     │
-│           printOrder, listOnSale(缓存)                  │
+│           listOnSale(缓存)                              │
 ├─────────────────────────────────────────────────────────┤
 │                     Mapper 层                           │
 │  MyBatis 全注解: @Select @Insert @Update @Delete       │
@@ -139,7 +139,7 @@ CREATE DATABASE restaurant_management CHARACTER SET utf8mb4 COLLATE utf8mb4_unic
 - 创建 `order_status_log`（订单状态审计日志，营业额统计依据）
 - 插入 6 张测试桌台（A1~C1）
 
-### 第三步：配置数据库密码
+### 第三步：配置数据库密码与 JWT 密钥
 
 创建 `src/main/resources/application-local.yml`：
 
@@ -150,13 +150,22 @@ spring:
   data:
     redis:
       password: 你的Redis密码  # Redis无密码则删除此行
+
+# JWT 签名密钥（至少32字符，可用 `openssl rand -hex 32` 生成；
+# 启动时会强校验，缺失/过短/使用默认值都会拒绝启动，防止生产环境误用公开密钥）
+jwt:
+  secret: 你的随机密钥
 ```
+
+生产部署时建议改用环境变量 `JWT_SECRET`（优先级高于配置文件）。
 
 ### 第四步：启动
 
+项目自带 Maven Wrapper（无需本机安装 Maven，首次运行自动下载）：
+
 ```powershell
 cd restaurant-backend
-mvn spring-boot:run
+.\mvnw.cmd spring-boot:run   # Linux/macOS 用 ./mvnw
 ```
 
 ### 第五步：访问文档
@@ -243,8 +252,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
 
 ```
 请求到达 → 查该桌台有无活跃订单（状态 IN 1,2,3,4）
-        ├── 无活跃订单 → 首次点餐：占桌台 + 建订单 + 打完整小票
-        └── 有活跃订单 → 加菜：追加明细 + 重算总价 + 打加菜单
+        ├── 无活跃订单 → 首次点餐：占桌台 + 建订单 + WebSocket 通知
+        └── 有活跃订单 → 加菜：追加明细 + 重算总价 + WebSocket 通知
 ```
 
 **请求体**:
@@ -316,8 +325,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
 | 角色 | 允许操作 | 不允许 |
 |:--:|------|:--:|
 | 管理员(1) | 所有合法流转 + 取消 | — |
-| 服务员(2) | 上菜(2→3)、结账(4→5) | 开始制作(1→2) |
-| 后厨(3) | 开始制作(1→2) | 上菜、结账 |
+| 服务员(2) | 上菜(2→3)、用餐中(3→4)、结账(4→5) | 开始制作(1→2) |
+| 后厨(3) | 开始制作(1→2) | 上菜、用餐中、结账 |
 
 **附加行为**：状态变为 `5`（已结账）或 `0`（已取消）时，**自动释放桌台**（1→0）
 
@@ -448,7 +457,7 @@ WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
 
 | 端点 | 连接方式 | 接收的消息类型 |
 |------|------|------|
-| `ws://localhost:8080/ws/kitchen?role=kitchen&token=<JWT>` | 后厨显示屏连接 | `NEW_ORDER`（新订单）、`ADD_ITEMS`（加菜） |
+| `ws://localhost:8080/ws/kitchen?token=<JWT>` | 后厨显示屏连接（仅后厨角色可连） | `NEW_ORDER`（新订单）、`ADD_ITEMS`（加菜） |
 
 **消息格式**:
 
@@ -474,7 +483,7 @@ WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
 }
 ```
 
-**频道隔离设计**: 连接时通过 `?role=kitchen&token=<JWT>` 参数指定频道和认证，服务端维护 `Map<String, Set<WebSocketSession>>`，握手时校验员工 JWT，厨房只收厨房的消息，未来可扩展 waiter/customer 频道。
+**频道隔离设计**: 连接时通过 `?token=<JWT>` 参数认证，服务端维护 `Map<String, Set<WebSocketSession>>`，握手时校验后厨角色（role=3），频道由服务端按 token 角色归置（不信任客户端参数），未来可扩展 waiter/customer 频道。
 
 ---
 
@@ -547,7 +556,7 @@ WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
 | 值 | 名称 | 权限范围 | 典型用户 |
 |:--:|------|------|------|
 | 1 | 管理员 | 全部操作 + 营业额统计 | 店长/老板 |
-| 2 | 服务员 | 桌台管理、上菜(2→3)、结账(4→5) | 前台/服务员 |
+| 2 | 服务员 | 桌台管理、上菜(2→3)、用餐中(3→4)、结账(4→5) | 前台/服务员 |
 | 3 | 后厨 | 查看订单、开始制作(1→2) | 厨师 |
 
 ### 路径拦截白名单
@@ -604,7 +613,7 @@ mvn test
 | `shouldVersionIncrementCorrectly` | 连续操作version正确累加 |
 | `shouldThrowWhenTableNotExists` | 不存在的桌台抛异常 |
 
-**OrdersServiceTest（20个用例）**:
+**OrdersServiceTest（21个用例）**:
 
 | 用例分类 | 用例 | 验证点 |
 |------|------|------|
@@ -622,6 +631,7 @@ mvn test
 | 角色权限 | `chefShouldTransitionFromPendingToCooking` | 后厨 1→2 |
 | | `chefShouldNotTransitionToServing` | 后厨不能上菜 |
 | | `waiterShouldTransitionFromCookingToServing` | 服务员 2→3 |
+| | `waiterShouldTransitionFromServingToDining` | 服务员 3→4 |
 | | `waiterShouldCheckout` | 服务员 4→5 |
 | | `waiterShouldNotStartCooking` | 服务员不能制作 |
 | | `adminShouldHaveFullPermission` | 管理员全权限 |
