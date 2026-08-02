@@ -39,14 +39,6 @@ public class EmployeeServiceImpl implements EmployeeService {
         if(employee==null||!PasswordEncoderUtil.matches(password,employee.getPassword())){
             throw new BusinessException("用户名或密码错误");
         }
-        /*
-        if(employee==null){
-            throw new BusinessException("雇员不存在:username="+username);
-        }
-        if(!employee.getPassword().equals(password)){
-            throw new BusinessException("密码错误");
-        }
-        */
         if(employee.getStatus()==0){
             throw new BusinessException("账号已禁用");
         }

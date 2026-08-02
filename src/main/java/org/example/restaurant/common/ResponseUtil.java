@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletResponse;
  */
 public class ResponseUtil {
 
+    /** JSON 序列化工具 */
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     /**

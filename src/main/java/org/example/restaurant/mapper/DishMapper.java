@@ -1,6 +1,7 @@
 package org.example.restaurant.mapper;//1，声明该文件在mapper包下
 
 import org.apache.ibatis.annotations.*;//2，引入注解工具@Select @Insert等
+import org.apache.ibatis.annotations.Param;
 import org.example.restaurant.entity.Dish;//3，引入对应的实体类
 import java.util.List;//4，引入列表List查多条数据时要返回LIst
 
@@ -14,6 +15,7 @@ public interface DishMapper { //6，注意Mapper包里的是接口不是实现�
 
     @Insert("INSERT INTO dish (name, category_id, price, image, description, status,create_time,update_time) " +
             "VALUES (#{name}, #{categoryId}, #{price}, #{image}, #{description}, #{status},#{createTime},#{updateTime})")
+    @Options(useGeneratedKeys = true, keyProperty = "id")
     void insert(Dish dish); //10,向表中插入数据，参数传实体对象
 
     @Update("UPDATE dish SET name=#{name}, category_id=#{categoryId}, price=#{price}, " +
@@ -28,5 +30,12 @@ public interface DishMapper { //6，注意Mapper包里的是接口不是实现�
      */
     @Select("SELECT * FROM dish WHERE status = 1 ORDER BY id")
     List<Dish> findOnSale();
+
+    /**
+     * 按ID批量查询菜品（含已下架），用于订单明细展示菜名
+     */
+    @Select("<script>SELECT * FROM dish WHERE id IN " +
+            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach></script>")
+    List<Dish> findByIds(@Param("ids") List<Long> ids);
 
 }

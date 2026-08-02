@@ -1,7 +1,9 @@
 package org.example.restaurant.service.impl;
 
 import org.example.restaurant.common.BusinessException;
+import org.example.restaurant.entity.Orders;
 import org.example.restaurant.entity.TableInfo;
+import org.example.restaurant.mapper.OrdersMapper;
 import org.example.restaurant.mapper.TableInfoMapper;
 import org.example.restaurant.service.TableInfoService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +18,9 @@ public class TableInfoServiceImpl implements TableInfoService {
 
     @Autowired
     private TableInfoMapper tableInfoMapper;
+
+    @Autowired
+    private OrdersMapper ordersMapper;
 
     @Override
     public List<TableInfo> list() {
@@ -43,6 +48,11 @@ public class TableInfoServiceImpl implements TableInfoService {
 
     @Override
     public void deleteById(Long id) {
+        // 有进行中订单(状态1-4)的桌台不能删除，避免订单 table_id 悬挂
+        List<Orders> activeOrders = ordersMapper.findActiveByTableId(id);
+        if (activeOrders != null && !activeOrders.isEmpty()) {
+            throw new BusinessException("桌台有进行中的订单，不能删除");
+        }
         tableInfoMapper.deleteById(id);
     }
 

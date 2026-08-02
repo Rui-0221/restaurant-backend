@@ -20,6 +20,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -51,14 +52,18 @@ public class OrdersServiceImpl implements OrdersService {
 
     @Override
     public Map<String, Object> list(Integer page, Integer size) {
-        // 参数校验，防止恶意请求
-        if (page == null || page < 1) page = 1;
+        // 参数校验，防止恶意请求：page 1~10000、size 1~100，防止 offset 整数溢出
+        if (page == null || page < 1 || page > 10000) page = 1;
         if (size == null || size < 1 || size > 100) size = 20;
         int offset = (page - 1) * size;
 
+        // 从数据库中查询当前页数据
+        // 从偏移量开始，查询 size 条记录，即当前页数据
         List<Orders> orders = ordersMapper.listPage(offset, size);
         Long total = ordersMapper.count();
 
+        // 构建分页结果
+        // 包含订单列表、总记录数、当前页码、每页数量
         Map<String, Object> result = new java.util.HashMap<>();
         result.put("list", orders);
         result.put("total", total);
@@ -78,12 +83,13 @@ public class OrdersServiceImpl implements OrdersService {
 
     @Override
     public Orders getActiveOrderByTable(Long tableId) {
+        // 有活跃订单返回第一个，无则返回 null（前端据此判断首次点餐还是加菜）
         List<Orders> activeOrders = ordersMapper.findActiveByTableId(tableId);
         return (activeOrders != null && !activeOrders.isEmpty()) ? activeOrders.get(0) : null;
     }
 
-    // ==================== 扫码点餐（改造版：首次点餐 OR 加菜）====================
 
+    // ==================== 扫码点餐（改造版：首次点餐 OR 加菜）====================
     /**
      * 扫码点餐入口 — 自动判断首次点餐还是加菜
      *
@@ -117,8 +123,9 @@ public class OrdersServiceImpl implements OrdersService {
     /**
      * 首次点餐：占桌台 + 创建订单
      *
-     * 并发处理：如果占桌台的CAS失败（说明另一请求已抢先占了该桌台并创建了订单），
-     * 则自动转为加菜模式，追加到新创建的订单中
+     * 并发处理：如果占桌台的CAS失败（说明另一请求已抢先占了该桌台），
+     * 尝试重查活跃订单转为加菜；但外层事务是REPEATABLE READ快照读，
+     * 对方订单未提交时重查为空，只能抛异常由客户端重试（重试后走加菜分支）
      */
     private OrderVO createNewOrder(ScanOrderDTO dto) {
         // 1. 占用桌台（乐观锁防并发）
@@ -130,7 +137,9 @@ public class OrdersServiceImpl implements OrdersService {
                 tableInfoService.updateStatus(dto.getTableId(), 1);
                 tableOccupiedByMe = true;
             } catch (BusinessException e) {
-                // CAS冲突：另一请求已抢先占用桌台并创建了订单 → 自动转为加菜
+                // CAS冲突：另一请求已抢先占用桌台
+                // 注：REPEATABLE READ 快照读下看不到对方未提交的订单，重查通常为空，
+                // 此时只能抛异常，由客户端重试后自然走加菜分支（防重复建单的目的已达）
                 List<Orders> activeOrders = ordersMapper.findActiveByTableId(dto.getTableId());
                 if (activeOrders != null && !activeOrders.isEmpty()) {
                     return addItemsToOrder(activeOrders.get(0).getId(), dto.getItems());
@@ -213,7 +222,7 @@ public class OrdersServiceImpl implements OrdersService {
         BigDecimal newTotal = order.getTotalAmount().add(result.total);
         ordersMapper.updateTotalAmount(orderId, newTotal);
 
-        // 更新内存中的订单对象（给打印和通知用）
+        // 更新内存中的订单对象（给返回结果和通知用）
         order.setTotalAmount(newTotal);
 
         // 4. 批量插入新明细
@@ -239,8 +248,11 @@ public class OrdersServiceImpl implements OrdersService {
 
         // 6. 查询全部明细（旧的+新的）用于返回
         List<OrderDetail> allDetails = orderDetailMapper.findByOrderId(orderId);
-        Map<Long, String> dishNameMap = dishMapper.findOnSale().stream()
-                .collect(Collectors.toMap(org.example.restaurant.entity.Dish::getId, org.example.restaurant.entity.Dish::getName));
+        // 按明细里的 dishId 查菜名（含已下架菜品），避免已下架旧菜显示"未知菜品"
+        List<Long> dishIds = allDetails.stream().map(OrderDetail::getDishId).distinct().toList();
+        Map<Long, String> dishNameMap = dishIds.isEmpty() ? Collections.emptyMap()
+                : dishMapper.findByIds(dishIds).stream()
+                        .collect(Collectors.toMap(Dish::getId, Dish::getName));
 
         return OrderVO.from(order, allDetails, dishNameMap);
     }
@@ -297,7 +309,7 @@ public class OrdersServiceImpl implements OrdersService {
      * 状态枚举：0取消 / 1待制作 / 2制作中 / 3上菜 / 4用餐中 / 5已结账
      * 角色权限绑定：
      *   - 后厨(role=3) 允许：1→2 (开始制作)
-     *   - 服务员(role=2) 允许：2→3 (上菜)、4→5 (结账)
+     *   - 服务员(role=2) 允许：2→3 (上菜)、3→4 (用餐中)、4→5 (结账)
      *   - 管理员(role=1) 全权限
      *
      * 新增：结账(→5)或取消(→0)时，自动释放桌台(1→0)
@@ -361,9 +373,9 @@ public class OrdersServiceImpl implements OrdersService {
         if (role != null && role == 3) {
             return from == 1 && to == 2;
         }
-        // 服务员(role=2)：允许 2→3、4→5
+        // 服务员(role=2)：允许 2→3、3→4、4→5
         if (role != null && role == 2) {
-            return (from == 2 && to == 3) || (from == 4 && to == 5);
+            return (from == 2 && to == 3) || (from == 3 && to == 4) || (from == 4 && to == 5);
         }
         return false;
     }
