@@ -59,10 +59,7 @@ public class OrdersController {
         description = "扫码下单。若该桌台已有活跃订单(状态1-4)，则自动加菜追加明细；若无活跃订单，则占桌台并创建新订单。" +
                       "金额由后端强制重算，不信任前端。同一桌多人扫码、中途加菜都走此接口")
     public Result<OrderVO> scanOrder(@Valid @RequestBody ScanOrderDTO dto) {
-        // 用户认证后使用上下文中的 userId，防止伪造
-        // 防止伪造：始终使用认证上下文中的 userId，不信任前端传入
-        // 员工扫码时 userId 为 null（代表员工代客点餐），用户扫码时为真实用户 id
-        dto.setUserId(UserContext.getUserId());
+        // 防冒名：Service 层会用 JWT 中的 userId 覆盖前端传的值（null 时不覆盖，支持员工代下单）
         OrderVO vo = ordersService.placeOrder(dto);
         return Result.success(vo);
     }
