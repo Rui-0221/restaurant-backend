@@ -29,8 +29,19 @@ public class JwtUtil {
     private static String SECRET;
     private static long EXPIRATION;
 
+    /** 默认占位密钥（禁止生产使用，启动时校验拦截） */
+    private static final String DEFAULT_SECRET = "please-change-this-secret-key-in-production-at-least-32-chars";
+
     @PostConstruct
     public void init() {
+        // 启动强校验：密钥必须 ≥32 字节（HMAC-SHA256 要求）且不能是仓库里的公开默认值，
+        // 防止生产环境忘记配置 JWT_SECRET 导致任何人可伪造管理员 token
+        if (secretConfig == null || secretConfig.isEmpty()) {
+            throw new IllegalStateException("jwt.secret 未配置，请通过 JWT_SECRET 环境变量设置至少 32 字符的密钥");
+        }
+        if (DEFAULT_SECRET.equals(secretConfig) || secretConfig.getBytes(StandardCharsets.UTF_8).length < 32) {
+            throw new IllegalStateException("jwt.secret 仍为默认值或长度不足 32 字节，请通过 JWT_SECRET 环境变量配置密钥");
+        }
         SECRET = secretConfig;
         EXPIRATION = expirationConfig;
     }

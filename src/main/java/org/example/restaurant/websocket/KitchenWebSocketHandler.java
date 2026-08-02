@@ -23,9 +23,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * - 未来可扩展：waiter 频道（服务员端）、customer 频道（用户端）
  *
  * 连接方式（前端）：
- *   ws://localhost:8080/ws/kitchen?role=kitchen&token=<jwt_token>
+ *   ws://localhost:8080/ws/kitchen?token=<jwt_token>
  *
- * 认证：通过 token 参数传递 JWT，握手时校验员工身份
+ * 认证：通过 token 参数传递 JWT，握手时校验后厨角色（role=3）
  */
 @Component
 public class KitchenWebSocketHandler extends TextWebSocketHandler {
@@ -43,16 +43,28 @@ public class KitchenWebSocketHandler extends TextWebSocketHandler {
         if (token == null || token.isEmpty()) {
             log.warn("WebSocket 连接缺少token: sessionId={}", session.getId());
             try {
-                session.close(CloseStatus.POLICY_VIOLATION);
+                session.close(CloseStatus.POLICY_VIOLATION);// 关闭连接，通知客户端策略违规
             } catch (IOException ignored) {
             }
             return;
         }
 
+        // 校验 token 类型是否为 employee
         try {
             String tokenType = JwtUtil.parseTokenType(token);
             if (!"employee".equals(tokenType)) {
                 log.warn("WebSocket 连接token类型错误: sessionId={}, type={}", session.getId(), tokenType);
+                try {
+                    session.close(CloseStatus.POLICY_VIOLATION);
+                } catch (IOException ignored) {
+                }
+                return;
+            }
+
+            // 后厨频道仅允许后厨角色(role=3)连接，防止服务员/管理员 token 越权接收订单通知
+            Integer role = JwtUtil.parseRole(token);
+            if (role == null || role != 3) {
+                log.warn("WebSocket 连接非后厨角色: sessionId={}, role={}", session.getId(), role);
                 try {
                     session.close(CloseStatus.POLICY_VIOLATION);
                 } catch (IOException ignored) {
@@ -68,22 +80,22 @@ public class KitchenWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        // 从连接参数中获取角色，归入对应频道
-        String role = getParam(session, "role");
-        String channel = (role != null && !role.isEmpty()) ? role : "kitchen";
-
-        channels.computeIfAbsent(channel, k -> ConcurrentHashMap.newKeySet()).add(session);
-        log.info("WebSocket 连接建立: channel={}, sessionId={}, 当前频道连接数={}",
-                channel, session.getId(), channels.get(channel).size());
+        // 频道由服务端按 token 角色决定（当前仅后厨频道），不信任客户端传入的 role 参数
+        channels.computeIfAbsent("kitchen", k -> ConcurrentHashMap.newKeySet()).add(session);
+        log.info("WebSocket 连接建立: channel=kitchen, sessionId={}, 当前频道连接数={}",
+                session.getId(), channels.get("kitchen").size());
     }
 
+    
     @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+    // 处理客户端消息
+       protected void handleTextMessage(WebSocketSession session, TextMessage message) {
         // 当前仅需服务端推送通知，暂不处理客户端上行消息
         log.debug("收到客户端消息: sessionId={}, payload={}", session.getId(), message.getPayload());
     }
 
     @Override
+    // 连接关闭时，从所有频道中移除该会话
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         // 从所有频道中移除该会话
         channels.values().forEach(sessions -> sessions.remove(session));
@@ -91,6 +103,7 @@ public class KitchenWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
+    // 处理传输异常
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         log.error("WebSocket 传输异常: sessionId={}", session.getId(), exception);
         channels.values().forEach(sessions -> sessions.remove(session));
