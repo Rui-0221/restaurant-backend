@@ -9,7 +9,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.transaction.annotation.Transactional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -20,9 +19,11 @@ import static org.junit.jupiter.api.Assertions.*;
  * 1. 正常状态流转
  * 2. 非法状态流转抛异常
  * 3. CAS乐观锁防并发（模拟并发冲突）
+ *
+ * 注意：updateStatus 使用 REQUIRES_NEW 独立事务，测试数据必须真实提交后才能被读到，
+ * 因此不用 @Transactional 自动回滚，改为 @AfterEach 手动清理。
  */
 @SpringBootTest
-@Transactional  // 每个测试方法结束后自动回滚
 class TableInfoServiceTest {
 
     @Autowired
@@ -53,6 +54,8 @@ class TableInfoServiceTest {
     @AfterEach
     void tearDown() {
         UserContext.clear();
+        // 清理测试桌台（真实提交，确保下次运行无残留）
+        tableInfoMapper.deleteById(testTableId);
     }
 
     // ==================== 正常状态流转 ====================

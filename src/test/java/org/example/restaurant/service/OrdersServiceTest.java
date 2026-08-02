@@ -13,10 +13,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -32,9 +33,11 @@ import static org.junit.jupiter.api.Assertions.*;
  * 5. 结账自动释放桌台，之后可再次点餐
  * 6. 角色权限（后厨/服务员/管理员）
  * 7. 后端金额重算（防前端篡改）
+ *
+ * 注意：placeOrder 内部通过 REQUIRES_NEW 事务占用桌台，测试数据必须真实提交后才能被读到，
+ * 因此不用 @Transactional 自动回滚，改为 @AfterEach 手动清理。
  */
 @SpringBootTest
-@Transactional
 class OrdersServiceTest {
 
     @Autowired
@@ -55,9 +58,14 @@ class OrdersServiceTest {
     @Autowired
     private OrderDetailMapper orderDetailMapper;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     private Long testTableId;
     private Long onSaleDishId;
     private Long offSaleDishId;
+    /** 测试中创建的所有菜品ID，用于清理 */
+    private final List<Long> createdDishIds = new ArrayList<>();
 
     @BeforeEach
     void setUp() {
@@ -82,6 +90,7 @@ class OrdersServiceTest {
         dish1.setUpdateTime(LocalDateTime.now());
         dishMapper.insert(dish1);
         onSaleDishId = dish1.getId();
+        createdDishIds.add(onSaleDishId);
 
         // 已下架菜品
         Dish dish2 = new Dish();
@@ -93,11 +102,21 @@ class OrdersServiceTest {
         dish2.setUpdateTime(LocalDateTime.now());
         dishMapper.insert(dish2);
         offSaleDishId = dish2.getId();
+        createdDishIds.add(offSaleDishId);
     }
 
     @AfterEach
     void tearDown() {
         UserContext.clear();
+        // 清理测试数据（真实提交，确保下次运行无残留）：
+        // 状态日志 → 订单明细 → 订单 → 菜品 → 桌台
+        jdbcTemplate.update("DELETE FROM order_status_log WHERE order_id IN (SELECT id FROM orders WHERE table_id = ?)", testTableId);
+        jdbcTemplate.update("DELETE FROM order_detail WHERE order_id IN (SELECT id FROM orders WHERE table_id = ?)", testTableId);
+        jdbcTemplate.update("DELETE FROM orders WHERE table_id = ?", testTableId);
+        for (Long dishId : createdDishIds) {
+            jdbcTemplate.update("DELETE FROM dish WHERE id = ?", dishId);
+        }
+        jdbcTemplate.update("DELETE FROM table_info WHERE id = ?", testTableId);
     }
 
     // ==================== 首次点餐 ====================
@@ -303,6 +322,15 @@ class OrdersServiceTest {
     }
 
     @Test
+    void waiterShouldTransitionFromServingToDining() {
+        Orders order = createTestOrder();
+        ordersService.updateOrderStatus(order.getId(), 2, 1); // 管理员 1→2
+        ordersService.updateOrderStatus(order.getId(), 3, 1); // 管理员 2→3
+        ordersService.updateOrderStatus(order.getId(), 4, 2); // 服务员 3→4
+        assertEquals(4, ordersService.getById(order.getId()).getStatus());
+    }
+
+    @Test
     void waiterShouldCheckout() {
         Orders order = createTestOrder();
         ordersService.updateOrderStatus(order.getId(), 2, 1);
@@ -382,6 +410,7 @@ class OrdersServiceTest {
         dish.setCreateTime(LocalDateTime.now());
         dish.setUpdateTime(LocalDateTime.now());
         dishMapper.insert(dish);
+        createdDishIds.add(dish.getId());
         return dish;
     }
 }
