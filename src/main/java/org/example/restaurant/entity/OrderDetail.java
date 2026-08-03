@@ -1,6 +1,5 @@
 package org.example.restaurant.entity;
 
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
@@ -17,6 +16,4 @@ public class OrderDetail {
     private Integer amount;
     @NotNull(message = "价格不能为空")
     private BigDecimal price;
-    /** 菜品名称（仅用于响应展示，不映射数据库字段） */
-    private String dishName;
 }

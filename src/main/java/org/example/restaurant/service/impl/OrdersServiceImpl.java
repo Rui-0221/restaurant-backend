@@ -89,7 +89,7 @@ public class OrdersServiceImpl implements OrdersService {
     }
 
 
-    // ==================== 扫码点餐（改造版：首次点餐 OR 加菜）====================
+    // ==================== 扫码点餐（首次点餐 OR 加菜）====================
     /**
      * 扫码点餐入口 — 自动判断首次点餐还是加菜
      *
@@ -294,7 +294,6 @@ public class OrdersServiceImpl implements OrdersService {
 
             OrderDetail detail = new OrderDetail();
             detail.setDishId(item.getDishId());
-            detail.setDishName(dish.getName());
             detail.setAmount(item.getAmount());
             detail.setPrice(dish.getPrice());
             details.add(detail);
