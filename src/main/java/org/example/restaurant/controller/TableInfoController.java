@@ -3,6 +3,7 @@ package org.example.restaurant.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.example.restaurant.common.BusinessException;
 import org.example.restaurant.common.Result;
 import org.example.restaurant.common.UserContext;
 import org.example.restaurant.entity.TableInfo;
@@ -36,6 +37,12 @@ public class TableInfoController {
     @PostMapping
     @Operation(summary = "新增桌台", description = "添加新桌台")
     public Result<String> add(@Valid @RequestBody TableInfo table) {
+        // 仅管理员可操作桌台管理
+        Integer role = UserContext.getRole();
+        if (role == null || role != 1) {
+            throw new BusinessException("仅管理员可操作桌台管理");
+        }
+
         tableInfoService.add(table);
         return Result.success("添加成功");
     }
@@ -43,6 +50,12 @@ public class TableInfoController {
     @PutMapping
     @Operation(summary = "修改桌台", description = "更新桌台信息（名称、容量）")
     public Result<String> update(@Valid @RequestBody TableInfo table) {
+        // 仅管理员可操作桌台管理
+        Integer role = UserContext.getRole();
+        if (role == null || role != 1) {
+            throw new BusinessException("仅管理员可操作桌台管理");
+        }
+
         tableInfoService.update(table);
         return Result.success("修改成功");
     }
@@ -50,6 +63,12 @@ public class TableInfoController {
     @DeleteMapping("/{id}")
     @Operation(summary = "删除桌台", description = "根据ID删除桌台")
     public Result<String> deleteById(@PathVariable Long id) {
+        // 仅管理员可操作桌台管理
+        Integer role = UserContext.getRole();
+        if (role == null || role != 1) {
+            throw new BusinessException("仅管理员可操作桌台管理");
+        }
+
         tableInfoService.deleteById(id);
         return Result.success("删除成功");
     }

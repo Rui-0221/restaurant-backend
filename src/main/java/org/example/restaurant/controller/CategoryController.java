@@ -3,7 +3,9 @@ package org.example.restaurant.controller;//controller包：接收前端的HTTP�
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.example.restaurant.common.BusinessException;
 import org.example.restaurant.common.Result;
+import org.example.restaurant.common.UserContext;
 import org.example.restaurant.entity.Category;
 import org.example.restaurant.service.CategoryService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,6 +34,12 @@ public class CategoryController {
     @Operation(summary = "新增分类", description="添加新的菜品分类" )
     public Result<String> add(@Valid @RequestBody Category category){
         // @RequestBody：把前端传来的JSON {"type":1, "name":"热菜"} 自动转成Category对象
+        // 仅管理员可操作分类管理
+        Integer role = UserContext.getRole();
+        if (role == null || role != 1) {
+            throw new BusinessException("仅管理员可操作分类管理");
+        }
+
         categoryService.add(category);
         return Result.success("添加成功");
     }
@@ -40,6 +48,12 @@ public class CategoryController {
     @Operation(summary = "修改分类",description = "更新分类信息")
     public Result<String> update(@Valid @RequestBody Category category){
         // 前端传来的JSON必须包含id，否则数据库不知道改哪行
+        // 仅管理员可操作分类管理
+        Integer role = UserContext.getRole();
+        if (role == null || role != 1) {
+            throw new BusinessException("仅管理员可操作分类管理");
+        }
+
         categoryService.update(category);
         return Result.success("修改成功");
     }
@@ -49,6 +63,12 @@ public class CategoryController {
     public Result<String> delete(@PathVariable Long id){
         //@PathVariable:从URL路径中取值
         //DELETE /category/3->id=3
+        // 仅管理员可操作分类管理
+        Integer role = UserContext.getRole();
+        if (role == null || role != 1) {
+            throw new BusinessException("仅管理员可操作分类管理");
+        }
+
         categoryService.delete(id);
         return Result.success("删除成功");
     }

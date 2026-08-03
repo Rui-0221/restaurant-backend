@@ -190,14 +190,14 @@ cd restaurant-backend
 
 ### 🪑 桌台管理 `⭐核心`
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/tables` | 查询所有桌台 |
-| GET | `/tables/{id}` | 查询单个桌台 |
-| POST | `/tables` | 新增桌台 |
-| PUT | `/tables` | 修改桌台（名称、容量） |
-| DELETE | `/tables/{id}` | 删除桌台 |
-| **PUT** | **`/tables/{id}/status?status=1`** | **变更状态（CAS乐观锁）** |
+| 方法 | 路径 | 说明 | 权限 |
+|------|------|------|:--:|
+| GET | `/tables` | 查询所有桌台 | ✅ 全员 |
+| GET | `/tables/{id}` | 查询单个桌台 | ✅ 全员 |
+| POST | `/tables` | 新增桌台 | 🔒管理员 |
+| PUT | `/tables` | 修改桌台（名称、容量） | 🔒管理员 |
+| DELETE | `/tables/{id}` | 删除桌台 | 🔒管理员 |
+| **PUT** | **`/tables/{id}/status?status=1`** | **变更状态（CAS乐观锁）** | ✅ 全员 |
 
 **状态枚举**: `0`空闲 `1`占用
 
@@ -328,6 +328,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
 | 服务员(2) | 上菜(2→3)、用餐中(3→4)、结账(4→5) | 开始制作(1→2) |
 | 后厨(3) | 开始制作(1→2) | 上菜、用餐中、结账 |
 
+**数据管理权限**: 菜品/分类/桌台的增删改、员工账号管理 → **仅管理员(1)**；服务员与后厨仅有读权限。桌台状态变更（`PUT /tables/{id}/status`，手动清台兜底）全员员工可操作。
+
 **附加行为**：状态变为 `5`（已结账）或 `0`（已取消）时，**自动释放桌台**（1→0）
 
 **请求示例**:
@@ -377,14 +379,16 @@ Authorization: Bearer <服务员Token>  // role=2
 
 ### 🍳 菜品管理
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/dishes` | 查询所有菜品 |
-| GET | `/dishes/{id}` | 查询单个菜品 |
-| POST | `/dishes` | 新增菜品 |
-| PUT | `/dishes` | 修改菜品 |
-| DELETE | `/dishes/{id}` | 删除菜品 |
-| **GET** | **`/dishes/on-sale`** | **查询在售菜品（Redis缓存）** |
+| 方法 | 路径 | 说明 | 权限 |
+|------|------|------|:--:|
+| GET | `/dishes` | 查询所有菜品 | ✅ 全员 |
+| GET | `/dishes/{id}` | 查询单个菜品 | ✅ 全员 |
+| POST | `/dishes` | 新增菜品 | 🔒管理员 |
+| PUT | `/dishes` | 修改菜品 | 🔒管理员 |
+| DELETE | `/dishes/{id}` | 删除菜品 | 🔒管理员 |
+| **GET** | **`/dishes/on-sale`** | **查询在售菜品（Redis缓存）** | ✅ 全员 |
+
+> 分类管理接口（`/categories` 增删改）同样仅管理员可操作；`GET /categories` 查询全员可用。
 
 **`GET /dishes/on-sale` 缓存策略**:
 - 首次请求 → 查 MySQL → 写入 Redis（TTL 1小时）
@@ -682,7 +686,7 @@ mvn test
 | 双 Token 类型隔离 | JWT 含 type claim（employee/user），拦截器交叉校验 | 防止用户 token 越权访问员工接口，反之亦然 |
 | JWT 过期 | Token 有效期 2 小时 | 限制泄露 Token 影响时间 |
 | 角色权限 | JWT 含 role + 业务层二次校验 | 防止越权操作 |
-| 员工管理写操作鉴权 | 增删改员工时 Controller 层校验 role==1 | 防止服务员/后厨越权管理员工 |
+| 数据管理写操作鉴权 | 员工/菜品/分类/桌台增删改时 Controller 层校验 role==1 | 防止服务员/后厨越权管理数据 |
 | 用户信息查询防越权 | `GET /users/me` 从 JWT token 提取 userId，不接受前端传 ID | 防止用户查他人信息 |
 | 扫码点餐防冒名 | `placeOrder()` 用 `UserContext.getUserId()` 覆盖 DTO 中的 userId | 防止冒名下单 |
 | 订单列表分页 | `LIMIT offset, size` + 参数校验（size 上限 100） | 防止全量返回导致内存/网络压力 |

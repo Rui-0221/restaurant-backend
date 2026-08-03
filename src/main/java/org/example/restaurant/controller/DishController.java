@@ -4,7 +4,9 @@ package org.example.restaurant.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.example.restaurant.common.BusinessException; //引入业务异常，权限不足时抛出
 import org.example.restaurant.common.Result; //引入"统一返回格式"工具。后面写Result.success()会使用到
+import org.example.restaurant.common.UserContext; //引入用户上下文，获取当前操作者的角色
 import org.example.restaurant.entity.Dish; //引入Dish实体类
 import org.example.restaurant.service.DishService; //引入DishService接口。后面注入和调用实现方法要使用到它
 import org.springframework.beans.factory.annotation.Autowired;// 引入@Autowired工具。后面注入Service要使用到
@@ -81,6 +83,12 @@ public class DishController {
         //返回类型：Result<String>
         //此时Result的data部分是字符串，比如 "添加成功"
 
+        // 仅管理员可操作菜品管理
+        Integer role = UserContext.getRole();
+        if (role == null || role != 1) {
+            throw new BusinessException("仅管理员可操作菜品管理");
+        }
+
         dishService.add(dish);
         //dishService调用add方法把对象dish添加到数据库里
 
@@ -100,6 +108,12 @@ public class DishController {
         //把这个对象传入变量dish
         //返回值Result的data部分是String型：修改成功返会字符串表明
 
+        // 仅管理员可操作菜品管理
+        Integer role = UserContext.getRole();
+        if (role == null || role != 1) {
+            throw new BusinessException("仅管理员可操作菜品管理");
+        }
+
         dishService.update(dish);
         //dishService调用update()方法实现修改
         return Result.success("修改成功");
@@ -114,6 +128,12 @@ public class DishController {
         //参数为：@PathVariable Long id
         //@PathVariable:表明从URL路径中把id取出来并赋值到Long id这个变量里
         //返回值Result的data的部分是String
+
+        // 仅管理员可操作菜品管理
+        Integer role = UserContext.getRole();
+        if (role == null || role != 1) {
+            throw new BusinessException("仅管理员可操作菜品管理");
+        }
 
         dishService.delete(id);
         //dishService调用delete方法删除数据
