@@ -565,7 +565,7 @@ WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
 
 | 排除路径 | 原因 |
 |------|------|
-| `/employees/login`, `/employees/login/**` | 员工登录 |
+| `/employees/login` | 员工登录 |
 | `/users/**` | 用户端路径，由 UserJwtInterceptor 处理 |
 | `/orders/scan-order` | 扫码点餐，顾客和员工均可访问 |
 | `/orders/table/**` | 查询桌台活跃订单，顾客扫码后使用 |

@@ -28,7 +28,6 @@ public class WebConfig implements WebMvcConfigurer {
                 //2，排除不需要拦截的路径（登录路径）
                 .excludePathPatterns("/favicon.ico",
                         "/employees/login", //登录接口
-                        "/employees/login/**",
                         "/users/**",//用户端路径由 UserJwtInterceptor 处理
                         "/orders/scan-order",//扫码点餐：顾客和员工均可访问
                         "/orders/table/**",//查询桌台活跃订单：顾客扫码后使用
