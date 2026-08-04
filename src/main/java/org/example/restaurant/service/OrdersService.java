@@ -18,9 +18,9 @@ public interface OrdersService {
     Orders getById(Long id);
 
     /**
-     * 查询桌台的活跃订单（状态1-4），无活跃订单时返回null
+     * 查询桌台的活跃订单（状态1-4，含明细），无活跃订单时返回null
      */
-    Orders getActiveOrderByTable(Long tableId);
+    OrderVO getActiveOrderByTable(Long tableId);
 
     /**
      * 扫码点餐（首次点餐 OR 加菜）— 改造版

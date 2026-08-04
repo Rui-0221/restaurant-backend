@@ -17,7 +17,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -64,17 +63,20 @@ class OrdersServiceTest {
     private Long testTableId;
     private Long onSaleDishId;
     private Long offSaleDishId;
-    /** 测试中创建的所有菜品ID，用于清理 */
-    private final List<Long> createdDishIds = new ArrayList<>();
+    /** 测试桌台固定名称（清理时按名称匹配，可同时删除历史残留） */
+    private static final String TEST_TABLE_NAME = "测试桌T2";
 
     @BeforeEach
     void setUp() {
         UserContext.setEmployeeId(1L);
         UserContext.setRole(1);
 
+        // 兜底清理：上次运行若被中断，同名测试数据会残留，先删干净再创建
+        deleteTestData();
+
         // 测试桌台
         TableInfo table = new TableInfo();
-        table.setName("测试桌T2");
+        table.setName(TEST_TABLE_NAME);
         table.setCapacity(4);
         table.setStatus(0);
         tableInfoMapper.insert(table);
@@ -90,7 +92,6 @@ class OrdersServiceTest {
         dish1.setUpdateTime(LocalDateTime.now());
         dishMapper.insert(dish1);
         onSaleDishId = dish1.getId();
-        createdDishIds.add(onSaleDishId);
 
         // 已下架菜品
         Dish dish2 = new Dish();
@@ -102,21 +103,25 @@ class OrdersServiceTest {
         dish2.setUpdateTime(LocalDateTime.now());
         dishMapper.insert(dish2);
         offSaleDishId = dish2.getId();
-        createdDishIds.add(offSaleDishId);
     }
 
     @AfterEach
     void tearDown() {
         UserContext.clear();
-        // 清理测试数据（真实提交，确保下次运行无残留）：
-        // 状态日志 → 订单明细 → 订单 → 菜品 → 桌台
-        jdbcTemplate.update("DELETE FROM order_status_log WHERE order_id IN (SELECT id FROM orders WHERE table_id = ?)", testTableId);
-        jdbcTemplate.update("DELETE FROM order_detail WHERE order_id IN (SELECT id FROM orders WHERE table_id = ?)", testTableId);
-        jdbcTemplate.update("DELETE FROM orders WHERE table_id = ?", testTableId);
-        for (Long dishId : createdDishIds) {
-            jdbcTemplate.update("DELETE FROM dish WHERE id = ?", dishId);
-        }
-        jdbcTemplate.update("DELETE FROM table_info WHERE id = ?", testTableId);
+        deleteTestData();
+    }
+
+    /**
+     * 清理测试数据（真实提交，确保下次运行无残留）。
+     * 按固定命名删除，因此也能清掉"上次运行被中断"残留的同名数据（兜底）。
+     * 删除顺序：状态日志 → 订单明细 → 订单 → 菜品 → 桌台
+     */
+    private void deleteTestData() {
+        jdbcTemplate.update("DELETE FROM order_status_log WHERE order_id IN (SELECT id FROM orders WHERE table_id IN (SELECT id FROM table_info WHERE name = ?))", TEST_TABLE_NAME);
+        jdbcTemplate.update("DELETE FROM order_detail WHERE order_id IN (SELECT id FROM orders WHERE table_id IN (SELECT id FROM table_info WHERE name = ?))", TEST_TABLE_NAME);
+        jdbcTemplate.update("DELETE FROM orders WHERE table_id IN (SELECT id FROM table_info WHERE name = ?)", TEST_TABLE_NAME);
+        jdbcTemplate.update("DELETE FROM dish WHERE name LIKE '测试菜品%' OR name LIKE '加菜%' OR name = '新菜品' OR name LIKE '李四%' OR name LIKE '王五%'");
+        jdbcTemplate.update("DELETE FROM table_info WHERE name = ?", TEST_TABLE_NAME);
     }
 
     // ==================== 首次点餐 ====================
@@ -410,7 +415,6 @@ class OrdersServiceTest {
         dish.setCreateTime(LocalDateTime.now());
         dish.setUpdateTime(LocalDateTime.now());
         dishMapper.insert(dish);
-        createdDishIds.add(dish.getId());
         return dish;
     }
 }

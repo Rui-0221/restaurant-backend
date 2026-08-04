@@ -365,14 +365,18 @@ Authorization: Bearer <服务员Token>  // role=2
 
 #### 查询桌台活跃订单 `GET /orders/table/{tableId}/active`
 
-前端扫码后可以先调此接口判断是首次点餐还是加菜：
+前端扫码后可以先调此接口判断是首次点餐还是加菜，并展示当前订单内容（含明细列表）：
 
 ```json
 // 无活跃订单 → 返回 null，前端展示"请点餐"
 { "code": 1, "msg": "success", "data": null }
 
-// 有活跃订单 → 返回订单信息，前端展示"已有点餐，是否加菜？"
-{ "code": 1, "msg": "success", "data": { "id": 42, "tableId": 1, "status": 1, ... } }
+// 有活跃订单 → 返回订单信息（含明细），前端展示"已有点餐，是否加菜？"
+{ "code": 1, "msg": "success", "data": {
+  "id": 42, "tableId": 1, "status": 4, "statusName": "用餐中",
+  "totalAmount": 59.80, "createTime": "2026-08-04T12:00:00",
+  "details": [ { "dishId": 1, "dishName": "鱼香肉丝", "amount": 2, "price": 29.90 } ]
+} }
 ```
 
 ---
@@ -600,8 +604,10 @@ mvn test
 
 ### 测试策略
 
-- **框架**: JUnit 5 + `@SpringBootTest` + `@Transactional`（自动回滚）
-- **每个测试方法独立运行**，不依赖执行顺序，不污染数据库
+- **框架**: JUnit 5 + `@SpringBootTest`
+- **事务**: 测试**不使用** `@Transactional` 自动回滚（`updateStatus` 用 REQUIRES_NEW，测试数据必须真实提交才能被读到），改为 `@BeforeEach`/`@AfterEach` 手动清理
+- **清理策略**: 测试数据有固定命名（桌台/菜品），`@BeforeEach` 先按命名清掉历史残留再创建新数据——即使上次运行被中断，下次运行也会自动自愈，不污染数据库
+- **每个测试方法独立运行**，不依赖执行顺序
 
 ### 测试覆盖清单
 

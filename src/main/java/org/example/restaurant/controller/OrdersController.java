@@ -65,12 +65,12 @@ public class OrdersController {
     }
 
     /**
-     * 查询桌台的活跃订单（前端扫码后先调用此接口判断是首次点餐还是加菜）
+     * 查询桌台的活跃订单（含明细，前端扫码后可先调用此接口判断是首次点餐还是加菜、展示当前订单内容）
      */
     @GetMapping("/table/{tableId}/active")
-    @Operation(summary = "查询桌台活跃订单", description = "查询指定桌台当前的活跃订单（状态1-4）。前端扫码后可先调用此接口判断是首次点餐还是加菜")
-    public Result<Orders> getActiveOrderByTable(@PathVariable Long tableId) {
-        Orders active = ordersService.getActiveOrderByTable(tableId);
+    @Operation(summary = "查询桌台活跃订单", description = "查询指定桌台当前的活跃订单（状态1-4，含明细列表）。前端扫码后可先调用此接口判断是首次点餐还是加菜、展示当前订单内容")
+    public Result<OrderVO> getActiveOrderByTable(@PathVariable Long tableId) {
+        OrderVO active = ordersService.getActiveOrderByTable(tableId);
         return Result.success(active);
     }
 

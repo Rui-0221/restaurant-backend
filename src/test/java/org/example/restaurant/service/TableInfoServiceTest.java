@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -32,7 +33,12 @@ class TableInfoServiceTest {
     @Autowired
     private TableInfoMapper tableInfoMapper;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     private Long testTableId;
+    /** 测试桌台固定名称（清理时按名称匹配，可同时删除历史残留） */
+    private static final String TEST_TABLE_NAME = "测试桌T1";
 
     @BeforeEach
     void setUp() {
@@ -40,9 +46,12 @@ class TableInfoServiceTest {
         UserContext.setEmployeeId(1L);
         UserContext.setRole(1);
 
+        // 兜底清理：上次运行若被中断，同名测试桌台会残留，先删干净再创建
+        jdbcTemplate.update("DELETE FROM table_info WHERE name = ?", TEST_TABLE_NAME);
+
         // 插入测试桌台
         TableInfo table = new TableInfo();
-        table.setName("测试桌T1");
+        table.setName(TEST_TABLE_NAME);
         table.setCapacity(4);
         table.setStatus(0);  // 空闲
         tableInfoMapper.insert(table);

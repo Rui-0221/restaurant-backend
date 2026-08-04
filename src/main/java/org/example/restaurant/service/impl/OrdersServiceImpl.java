@@ -82,10 +82,10 @@ public class OrdersServiceImpl implements OrdersService {
     }
 
     @Override
-    public Orders getActiveOrderByTable(Long tableId) {
-        // 有活跃订单返回第一个，无则返回 null（前端据此判断首次点餐还是加菜）
+    public OrderVO getActiveOrderByTable(Long tableId) {
+        // 有活跃订单返回第一个（含明细），无则返回 null（前端据此判断首次点餐还是加菜）
         List<Orders> activeOrders = ordersMapper.findActiveByTableId(tableId);
-        return (activeOrders != null && !activeOrders.isEmpty()) ? activeOrders.get(0) : null;
+        return (activeOrders != null && !activeOrders.isEmpty()) ? buildOrderVO(activeOrders.get(0)) : null;
     }
 
 
@@ -247,8 +247,14 @@ public class OrdersServiceImpl implements OrdersService {
                 });
 
         // 6. 查询全部明细（旧的+新的）用于返回
-        List<OrderDetail> allDetails = orderDetailMapper.findByOrderId(orderId);
-        // 按明细里的 dishId 查菜名（含已下架菜品），避免已下架旧菜显示"未知菜品"
+        return buildOrderVO(order);
+    }
+
+    /**
+     * 查询订单全部明细并按 dishId 查菜名（含已下架菜品，避免已下架旧菜显示"未知菜品"），组装返回 VO
+     */
+    private OrderVO buildOrderVO(Orders order) {
+        List<OrderDetail> allDetails = orderDetailMapper.findByOrderId(order.getId());
         List<Long> dishIds = allDetails.stream().map(OrderDetail::getDishId).distinct().toList();
         Map<Long, String> dishNameMap = dishIds.isEmpty() ? Collections.emptyMap()
                 : dishMapper.findByIds(dishIds).stream()
