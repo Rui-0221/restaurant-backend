@@ -138,9 +138,9 @@ public class OrdersServiceImpl implements OrdersService {
                 tableOccupiedByMe = true;
             } catch (BusinessException e) {
                 // CAS冲突：另一请求已抢先占用桌台
-                // 注：REPEATABLE READ 快照读下看不到对方未提交的订单，重查通常为空，
-                // 此时只能抛异常，由客户端重试后自然走加菜分支（防重复建单的目的已达）
-                List<Orders> activeOrders = ordersMapper.findActiveByTableId(dto.getTableId());
+                // 注：CAS 的 UPDATE 被对方行锁挡住，失败时对方事务必已结束；
+                // 用 FOR UPDATE 锁读绕过 REPEATABLE READ 快照，必然能看到已提交的订单 → 自动转加菜
+                List<Orders> activeOrders = ordersMapper.findActiveByTableIdForUpdate(dto.getTableId());
                 if (activeOrders != null && !activeOrders.isEmpty()) {
                     return addItemsToOrder(activeOrders.get(0).getId(), dto.getItems());
                 }
