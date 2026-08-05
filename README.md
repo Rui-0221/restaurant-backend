@@ -240,11 +240,13 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/orders?page=1&size=20` | 分页查询订单（按创建时间倒序） |
-| GET | `/orders/{id}` | 查询单个订单 |
+| GET | `/orders/{id}` | 查询单个订单（含明细列表，订单详情页用） |
 | **POST** | **`/orders/scan-order`** | **🔑 扫码点餐（核心接口）** |
 | **GET** | **`/orders/table/{tableId}/active`** | **查询桌台活跃订单** |
 | **PUT** | **`/orders/{id}/status?status=2`** | **订单状态流转** |
 | **GET** | **`/orders/statistics/today`** | **今日营业额（仅管理员）** |
+
+> **`GET /orders/{id}` 为何返回明细**：通过新增的 `getOrderDetail` 方法返回 `OrderVO`（订单信息 + 明细列表，含菜名），是为适配前端订单详情抽屉——展示任意状态订单（含已结账）的菜品明细，而原 `getById` 返回的订单对象不含明细。
 
 #### 🔑 扫码点餐 `POST /orders/scan-order`
 
@@ -580,6 +582,7 @@ WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
 | `/orders/scan-order` | 扫码点餐，顾客和员工均可访问 |
 | `/orders/table/**` | 查询桌台活跃订单，顾客扫码后使用 |
 | `/dishes/on-sale` | 顾客扫码后浏览在售菜品 |
+| `/categories` | 顾客扫码后查看菜单分类（与在售菜品同属公开菜单信息） |
 | `/swagger-ui/**`, `/v3/api-docs/**`, `/doc.html`, `/webjars/**` | API 文档 |
 | `/ws/**` | WebSocket 连接（握手时自行校验 JWT） |
 | `/error` | Spring 错误页 |
