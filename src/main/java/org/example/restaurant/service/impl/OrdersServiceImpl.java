@@ -82,6 +82,16 @@ public class OrdersServiceImpl implements OrdersService {
     }
 
     @Override
+    public OrderVO getOrderDetail(Long id) {
+        Orders orders = ordersMapper.findById(id);
+        if (orders == null) {
+            throw new BusinessException("订单不存在: id=" + id);
+        }
+        // 含明细，供管理端订单详情页展示（复用 buildOrderVO 组装逻辑）
+        return buildOrderVO(orders);
+    }
+
+    @Override
     public OrderVO getActiveOrderByTable(Long tableId) {
         // 有活跃订单返回第一个（含明细），无则返回 null（前端据此判断首次点餐还是加菜）
         List<Orders> activeOrders = ordersMapper.findActiveByTableId(tableId);

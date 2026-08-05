@@ -37,8 +37,8 @@ public class OrdersController {
 
     @GetMapping("/{id}")
     @Operation(summary = "查询单个订单", description = "根据ID获取订单信息")
-    public Result<Orders> getById(@PathVariable Long id){
-        return Result.success(ordersService.getById(id));
+    public Result<OrderVO> getById(@PathVariable Long id){
+        return Result.success(ordersService.getOrderDetail(id));
     }
 
     // ==================== 核心业务接口 ====================

@@ -18,6 +18,11 @@ public interface OrdersService {
     Orders getById(Long id);
 
     /**
+     * 查询单个订单详情（含明细，管理端订单详情页使用）
+     */
+    OrderVO getOrderDetail(Long id);
+
+    /**
      * 查询桌台的活跃订单（状态1-4，含明细），无活跃订单时返回null
      */
     OrderVO getActiveOrderByTable(Long tableId);
