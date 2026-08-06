@@ -6,6 +6,7 @@ import org.example.restaurant.entity.User;
 import org.example.restaurant.mapper.UserMapper;
 import org.example.restaurant.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -56,6 +57,12 @@ public class UserServiceImpl implements UserService {
 
         //3,设置创建时间并插入
         user.setCreateTime(LocalDateTime.now());
-        userMapper.insert(user);
+        try {
+            userMapper.insert(user);
+        } catch (DuplicateKeyException e) {
+            // 并发下两个请求可能同时通过第1步查重，数据库唯一索引 uk_phone 兜底拦截，
+            // 捕获后转成与查重一致的友好提示，而不是 500 错误
+            throw new BusinessException("手机号已被注册");
+        }
     }
 }

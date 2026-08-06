@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS user (
     phone VARCHAR(20) NOT NULL COMMENT '手机号',
     sex INT COMMENT '性别: 0女/1男',
     avatar VARCHAR(255) COMMENT '头像URL',
-    create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_phone (phone)
 ) COMMENT '用户表';
 
 -- ============================================

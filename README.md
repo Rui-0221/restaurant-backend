@@ -24,7 +24,7 @@
 
 - **场景**：线下餐厅扫码点餐、后厨协作、收银结账
 - **类型**：简历核心后端项目，面试可深度讲解 15 分钟
-- **规模**：56 个 Java 源文件，6 个 Controller，32 个单元测试
+- **规模**：56 个 Java 源文件，6 个 Controller，34 个单元测试
 
 ---
 
@@ -138,6 +138,7 @@ CREATE DATABASE restaurant_management CHARACTER SET utf8mb4 COLLATE utf8mb4_unic
 - 创建 `table_info`（桌台信息，含 version 乐观锁字段）
 - 创建 `order_status_log`（订单状态审计日志，营业额统计依据）
 - 插入 6 张测试桌台（A1~C1）
+- `user` 表新增 `uk_phone` 唯一索引（手机号查重 DB 兜底）；**已建库需手动执行** `ALTER TABLE user ADD UNIQUE KEY uk_phone (phone)`（执行前先确认无重复手机号）
 
 ### 第三步：配置数据库密码与 JWT 密钥
 
@@ -664,6 +665,13 @@ mvn test
 | `shouldRejectDeletingLastAdmin` | 删除最后一名管理员被拒绝 |
 | `shouldAllowDemotingAdminWhenAnotherAdminExists` | 存在第二名管理员时允许降级 |
 
+**UserServiceTest（2个用例）**:
+
+| 用例 | 验证点 |
+|------|------|
+| `shouldRejectDuplicatePhoneWithFriendlyMessage` | 重复手机号注册返回"手机号已被注册"友好提示 |
+| `shouldRejectDuplicatePhoneAtDbLevel` | 绕过 Service 查重直接插入 → DB 唯一索引兜底抛 `DuplicateKeyException` |
+
 ---
 
 ## 🏗️ 技术深度 — 设计决策
@@ -710,6 +718,7 @@ mvn test
 | 角色权限 | JWT 含 role + 业务层二次校验 | 防止越权操作 |
 | 数据管理写操作鉴权 | 员工/菜品/分类/桌台增删改时 Controller 层校验 role==1 | 防止服务员/后厨越权管理数据 |
 | 管理员保底 | 删除/降级/禁用最后一名管理员时拒绝（`countAdmins()==1` 守卫） | 防止系统失去管理入口 |
+| 注册查重 | Service 层 `findByPhone` 预检 + DB 唯一索引 `uk_phone` 兜底（捕获 `DuplicateKeyException` 转友好提示） | 防止手机号重复注册（含并发间隙） |
 | 用户信息查询防越权 | `GET /users/me` 从 JWT token 提取 userId，不接受前端传 ID | 防止用户查他人信息 |
 | 扫码点餐防冒名 | `placeOrder()` 用 `UserContext.getUserId()` 覆盖 DTO 中的 userId | 防止冒名下单 |
 | 订单列表分页 | `LIMIT offset, size` + 参数校验（size 上限 100） | 防止全量返回导致内存/网络压力 |
