@@ -32,4 +32,7 @@ public interface EmployeeMapper {
 
     @Delete("DELETE FROM employee WHERE id=#{id}")
     void deleteById(Long id);
+
+    @Select("SELECT COUNT(*) FROM employee WHERE role=1")
+    int countAdmins();
 }

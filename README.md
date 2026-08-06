@@ -24,7 +24,7 @@
 
 - **场景**：线下餐厅扫码点餐、后厨协作、收银结账
 - **类型**：简历核心后端项目，面试可深度讲解 15 分钟
-- **规模**：56 个 Java 源文件，6 个 Controller，28 个单元测试
+- **规模**：56 个 Java 源文件，6 个 Controller，32 个单元测试
 
 ---
 
@@ -418,6 +418,8 @@ Authorization: Bearer <服务员Token>  // role=2
 | PUT | `/employees/password` | 修改密码 | ✅ | 全员 |
 | DELETE | `/employees/{id}` | 删除员工 | ✅ | 🔒管理员 |
 
+**保护机制（最后一名管理员）**：系统强制保留至少一名管理员——删除、降级（role=1 → 其他）或禁用（status=1 → 0）最后一名管理员时，服务端返回 `至少保留一名管理员` 拒绝操作（`EmployeeServiceImpl` 守卫 + `countAdmins()` 校验）。首个管理员由 `init.sql` 种子数据提供；若管理员账号全部丢失（如早期版本误删），需直接操作数据库恢复，可复用 `init.sql` 中的 BCrypt 哈希插入一条 `role=1` 记录。
+
 **登录请求**:
 ```json
 POST /employees/login
@@ -628,7 +630,7 @@ mvn test
 | `shouldVersionIncrementCorrectly` | 连续操作version正确累加 |
 | `shouldThrowWhenTableNotExists` | 不存在的桌台抛异常 |
 
-**OrdersServiceTest（21个用例）**:
+**OrdersServiceTest（20个用例）**:
 
 | 用例分类 | 用例 | 验证点 |
 |------|------|------|
@@ -652,6 +654,15 @@ mvn test
 | | `adminShouldHaveFullPermission` | 管理员全权限 |
 | 安全 | `shouldIgnoreFrontendPrice` | 金额由后端重算（首次+加菜） |
 | 取消 | `shouldAllowCancelFromAnyState` | 待制作→取消 |
+
+**EmployeeServiceTest（4个用例）**:
+
+| 用例 | 验证点 |
+|------|------|
+| `shouldRejectDemotingLastAdmin` | 降级最后一名管理员被拒绝 |
+| `shouldRejectDisablingLastAdmin` | 禁用最后一名管理员被拒绝 |
+| `shouldRejectDeletingLastAdmin` | 删除最后一名管理员被拒绝 |
+| `shouldAllowDemotingAdminWhenAnotherAdminExists` | 存在第二名管理员时允许降级 |
 
 ---
 
@@ -698,6 +709,7 @@ mvn test
 | JWT 过期 | Token 有效期 2 小时 | 限制泄露 Token 影响时间 |
 | 角色权限 | JWT 含 role + 业务层二次校验 | 防止越权操作 |
 | 数据管理写操作鉴权 | 员工/菜品/分类/桌台增删改时 Controller 层校验 role==1 | 防止服务员/后厨越权管理数据 |
+| 管理员保底 | 删除/降级/禁用最后一名管理员时拒绝（`countAdmins()==1` 守卫） | 防止系统失去管理入口 |
 | 用户信息查询防越权 | `GET /users/me` 从 JWT token 提取 userId，不接受前端传 ID | 防止用户查他人信息 |
 | 扫码点餐防冒名 | `placeOrder()` 用 `UserContext.getUserId()` 覆盖 DTO 中的 userId | 防止冒名下单 |
 | 订单列表分页 | `LIMIT offset, size` + 参数校验（size 上限 100） | 防止全量返回导致内存/网络压力 |
