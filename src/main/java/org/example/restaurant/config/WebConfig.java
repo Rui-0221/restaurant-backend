@@ -31,6 +31,7 @@ public class WebConfig implements WebMvcConfigurer {
                         "/users/**",//用户端路径由 UserJwtInterceptor 处理
                         "/orders/scan-order",//扫码点餐：顾客和员工均可访问
                         "/orders/table/**",//查询桌台活跃订单：扫码后使用
+                        "/orders/user/**",//顾客历史订单：顾客端"我的"页使用
                         "/dishes/on-sale",//顾客扫码查看在售菜品（公开，菜品信息不敏感）
                         "/categories",//顾客扫码查看菜单分类（公开，与在售菜品同属菜单信息）
                         "/error",//spring错误页
@@ -44,7 +45,7 @@ public class WebConfig implements WebMvcConfigurer {
 
         //用户拦截器（新增）
         registry.addInterceptor(userJwtInterceptor)
-                .addPathPatterns("/users/**", "/orders/scan-order", "/orders/table/**")
+                .addPathPatterns("/users/**", "/orders/scan-order", "/orders/table/**", "/orders/user/**")
                 .excludePathPatterns("/users/login","/users/register");
     }
 }

@@ -4,6 +4,7 @@ import org.example.restaurant.dto.OrderVO;
 import org.example.restaurant.dto.ScanOrderDTO;
 import org.example.restaurant.entity.Orders;
 
+import java.util.List;
 import java.util.Map;
 
 public interface OrdersService {
@@ -26,6 +27,11 @@ public interface OrdersService {
      * 查询桌台的活跃订单（状态1-4，含明细），无活跃订单时返回null
      */
     OrderVO getActiveOrderByTable(Long tableId);
+
+    /**
+     * 当前登录顾客的历史订单（含明细，按时间倒序）— userId 取自 JWT，防越权
+     */
+    List<OrderVO> getMyOrders();
 
     /**
      * 扫码点餐（首次点餐 OR 加菜）— 改造版

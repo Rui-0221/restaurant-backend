@@ -269,6 +269,37 @@ class OrdersServiceTest {
         assertEquals(new BigDecimal("89.70"), vo2.getTotalAmount(), "29.90 × 3 = 89.70（全新订单金额）");
     }
 
+    // ==================== 顾客历史订单 ====================
+
+    @Test
+    void userHistoryShouldOnlyIncludeOwnOrders() {
+        // 顾客扫码下单：JWT 中的 userId 覆盖 DTO 传的值（防冒名）
+        UserContext.setUserId(100L);
+        OrderVO mine = ordersService.placeOrder(buildDTO(testTableId, List.of(item(onSaleDishId, 2))));
+        assertEquals(100L, ordersService.getById(mine.getId()).getUserId(), "顾客订单应归属 JWT 中的用户而非 DTO 传值");
+
+        // 结账释放桌台，模拟下一批客人
+        ordersService.updateOrderStatus(mine.getId(), 2, 1);
+        ordersService.updateOrderStatus(mine.getId(), 3, 1);
+        ordersService.updateOrderStatus(mine.getId(), 4, 1);
+        ordersService.updateOrderStatus(mine.getId(), 5, 1);
+
+        // 员工代点：无用户上下文 → 订单 user_id 为 NULL，不算在顾客头上
+        UserContext.setUserId(null);
+        ScanOrderDTO staffDto = buildDTO(testTableId, List.of(item(onSaleDishId, 1)));
+        staffDto.setUserId(null);
+        OrderVO staffOrder = ordersService.placeOrder(staffDto);
+        assertNull(ordersService.getById(staffOrder.getId()).getUserId(), "代点订单 user_id 应为 NULL");
+
+        // 顾客查自己的历史 → 只有自己那单（代点订单不出现）
+        UserContext.setUserId(100L);
+        List<OrderVO> history = ordersService.getMyOrders();
+        assertEquals(1, history.size(), "代点订单不应出现在顾客历史里");
+        assertEquals(mine.getId(), history.get(0).getId());
+        assertEquals(new BigDecimal("59.80"), history.get(0).getTotalAmount(), "历史订单应含金额");
+        assertEquals(1, history.get(0).getDetails().size(), "历史订单应含明细");
+    }
+
     // ==================== 菜品校验（首次点餐和加菜都适用）====================
 
     @Test

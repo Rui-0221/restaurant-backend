@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -72,6 +73,15 @@ public class OrdersController {
     public Result<OrderVO> getActiveOrderByTable(@PathVariable Long tableId) {
         OrderVO active = ordersService.getActiveOrderByTable(tableId);
         return Result.success(active);
+    }
+
+    /**
+     * 顾客历史订单（顾客端"我的"页使用）— 顾客 token 鉴权（UserJwtInterceptor），userId 取自 JWT
+     */
+    @GetMapping("/user/history")
+    @Operation(summary = "我的历史订单", description = "查询当前登录顾客的历史订单（按时间倒序，最多50条，含明细）。仅包含顾客自己扫码下的单，员工代点的订单不归属顾客")
+    public Result<List<OrderVO>> myHistory() {
+        return Result.success(ordersService.getMyOrders());
     }
 
     /**

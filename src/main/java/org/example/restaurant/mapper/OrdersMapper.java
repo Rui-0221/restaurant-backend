@@ -30,6 +30,13 @@ public interface OrdersMapper {
     List<Orders> findActiveByTableId(Long tableId);
 
     /**
+     * 顾客历史订单（按时间倒序，最多 50 条）— 仅统计该顾客自己下单的订单
+     * （员工代点的订单 user_id 为 NULL，不会出现在任何顾客的历史里）
+     */
+    @Select("SELECT * FROM orders WHERE user_id=#{userId} ORDER BY create_time DESC LIMIT 50")
+    List<Orders> findByUserId(Long userId);
+
+    /**
      * 占桌台 CAS 冲突后重查活跃订单：FOR UPDATE 锁读绕过 REPEATABLE READ 快照，
      * 必然能看到已提交的并发订单（CAS 失败时对方事务必已结束），用于自动转加菜
      */

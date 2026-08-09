@@ -98,6 +98,13 @@ public class OrdersServiceImpl implements OrdersService {
         return (activeOrders != null && !activeOrders.isEmpty()) ? buildOrderVO(activeOrders.get(0)) : null;
     }
 
+    @Override
+    public List<OrderVO> getMyOrders() {
+        // userId 取自 JWT（UserJwtInterceptor 保证已认证），接口不接收参数，无法越权查他人订单
+        List<Orders> orders = ordersMapper.findByUserId(UserContext.getUserId());
+        return orders.stream().map(this::buildOrderVO).toList();
+    }
+
 
     // ==================== 扫码点餐（首次点餐 OR 加菜）====================
     /**
