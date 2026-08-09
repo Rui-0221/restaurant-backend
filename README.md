@@ -273,6 +273,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
 }
 ```
 > 注意：`items` 中没有 `price` 字段 — 金额完全由后端根据数据库价格重算
+> 注意：`userId` 可空 — 顾客扫码时会被 JWT 中的 userId 覆盖（防冒名）；**员工代点餐时不传**（`placeOrder` 仅覆盖顾客 token 的 userId），订单 `user_id` 为 null，归属桌台
 
 **响应（首次点餐）**:
 ```json
@@ -320,6 +321,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
 服务员结账                           → 订单#42→已结账，桌台1→空闲
 下一批客人扫桌号1的码               → 创建新订单#43
 ```
+
+**员工代点餐**：服务员/管理员可从员工端「帮顾客点餐」页为不会扫码的顾客代下单。本接口对员工 token 同样放行（WebConfig 白名单），请求不传 `userId` 即可（DTO 字段可空，防冒名逻辑只覆盖顾客 token）——订单不关联顾客身份，归属桌台；占用桌提交自动转为加菜，与顾客扫码完全同一套逻辑。
 
 #### 订单状态流转 `PUT /orders/{id}/status`
 
