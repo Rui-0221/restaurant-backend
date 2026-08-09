@@ -244,6 +244,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
 | GET | `/orders/{id}` | 查询单个订单（含明细列表，订单详情页用） |
 | **POST** | **`/orders/scan-order`** | **🔑 扫码点餐（核心接口）** |
 | **GET** | **`/orders/table/{tableId}/active`** | **查询桌台活跃订单** |
+| **GET** | **`/orders/user/history`** | **我的历史订单（顾客端"我的"页）** |
 | **PUT** | **`/orders/{id}/status?status=2`** | **订单状态流转** |
 | **GET** | **`/orders/statistics/today`** | **今日营业额（仅管理员）** |
 
@@ -386,6 +387,22 @@ Authorization: Bearer <服务员Token>  // role=2
   "details": [ { "dishId": 1, "dishName": "鱼香肉丝", "amount": 2, "price": 29.90 } ]
 } }
 ```
+
+#### 我的历史订单 `GET /orders/user/history`
+
+顾客端「我的」页历史订单列表（按创建时间倒序，最多 50 条，含明细）：
+
+```json
+{ "code": 1, "msg": "success", "data": [
+  {
+    "id": 42, "userId": 7, "tableId": 1, "status": 5, "statusName": "已结账",
+    "totalAmount": 59.80, "createTime": "2026-08-04T12:00:00",
+    "details": [ { "dishId": 1, "dishName": "鱼香肉丝", "amount": 2, "price": 29.90 } ]
+  }
+] }
+```
+
+> **归属规则**：接口**不接收任何参数**，`userId` 直接取自 JWT（`UserJwtInterceptor` 保证已认证），因此只能查到自己的订单，无法越权。顾客扫码下单时 `user_id` 会被 JWT 覆盖（防冒名）；**员工代点餐的订单 `user_id` 为 NULL，不会出现在任何顾客的历史里**——归属桌台，不归属顾客。
 
 ---
 
@@ -539,7 +556,7 @@ WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
   │     → JwtInterceptor 校验 token 类型必须为 "employee"
   │     → 解析 employeeId + role → 存入 UserContext
   │
-  ├── /users/**, /orders/scan-order, /orders/table/**
+  ├── /users/**, /orders/scan-order, /orders/table/**, /orders/user/**
   │     → UserJwtInterceptor 校验 token 类型必须为 "user"
   │     → 解析 userId → 存入 UserContext
   │
@@ -587,6 +604,7 @@ WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
 | `/users/**` | 用户端路径，由 UserJwtInterceptor 处理 |
 | `/orders/scan-order` | 扫码点餐，顾客和员工均可访问 |
 | `/orders/table/**` | 查询桌台活跃订单，顾客扫码后使用 |
+| `/orders/user/**` | 顾客历史订单，顾客端「我的」页使用 |
 | `/dishes/on-sale` | 顾客扫码后浏览在售菜品 |
 | `/categories` | 顾客扫码后查看菜单分类（与在售菜品同属公开菜单信息） |
 | `/swagger-ui/**`, `/v3/api-docs/**`, `/doc.html`, `/webjars/**` | API 文档 |
@@ -600,8 +618,9 @@ WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
 | `/users/**` | 查询个人信息 `/users/me`（注册/登录已放行） |
 | `/orders/scan-order` | 扫码点餐 |
 | `/orders/table/**` | 查询桌台活跃订单 |
+| `/orders/user/**` | 我的历史订单 |
 
-> 注意：`/orders/scan-order` 和 `/orders/table/**` 被员工拦截器排除、由用户拦截器接管，确保顾客（用户 token）可以正常扫码点餐。
+> 注意：`/orders/scan-order`、`/orders/table/**`、`/orders/user/**` 被员工拦截器排除、由用户拦截器接管，确保顾客（用户 token）可以正常扫码点餐、查询自己的历史订单。
 
 ---
 
@@ -634,7 +653,7 @@ mvn test
 | `shouldVersionIncrementCorrectly` | 连续操作version正确累加 |
 | `shouldThrowWhenTableNotExists` | 不存在的桌台抛异常 |
 
-**OrdersServiceTest（20个用例）**:
+**OrdersServiceTest（21个用例）**:
 
 | 用例分类 | 用例 | 验证点 |
 |------|------|------|
@@ -658,6 +677,7 @@ mvn test
 | | `adminShouldHaveFullPermission` | 管理员全权限 |
 | 安全 | `shouldIgnoreFrontendPrice` | 金额由后端重算（首次+加菜） |
 | 取消 | `shouldAllowCancelFromAnyState` | 待制作→取消 |
+| 顾客历史 | `userHistoryShouldOnlyIncludeOwnOrders` | 订单归属 JWT 用户（防冒名）；代点单 user_id 为 NULL 不入顾客历史 |
 
 **EmployeeServiceTest（4个用例）**:
 
