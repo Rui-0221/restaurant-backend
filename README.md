@@ -24,7 +24,7 @@
 
 - **场景**：线下餐厅扫码点餐、后厨协作、收银结账
 - **类型**：简历核心后端项目，面试可深度讲解 15 分钟
-- **规模**：56 个 Java 源文件，6 个 Controller，34 个单元测试
+- **规模**：56 个 Java 源文件，6 个 Controller，52 个测试方法（关键并发场景各重复20轮）
 
 ---
 
@@ -260,7 +260,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
         └── 有活跃订单 → 加菜：追加明细 + 重算总价 + WebSocket 通知
 ```
 
-> **并发处理**：同一桌两人同时提交时，后到者的占桌 CAS 会冲突。服务端不会让客户端报错重试——CAS 失败意味着对方事务已结束（行锁保证时序），随即用 `FOR UPDATE` 锁读绕过事务快照重查，自动转为加菜，一次请求内完成。
+> **并发处理**：同一桌两人同时提交时，后到者的占桌 CAS 会冲突。服务端用 `FOR UPDATE` 锁读绕过事务快照重查并自动转为加菜；数据库同时通过生成列唯一索引 `uk_orders_active_table` 保证每桌最多一个活跃订单。即使桌台处于“占用但无订单”的异常状态，并发插入的唯一冲突也会重查胜出订单并转为加菜。
 
 **请求体**:
 ```json
@@ -274,6 +274,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
 }
 ```
 > 注意：`items` 中没有 `price` 字段 — 金额完全由后端根据数据库价格重算
+> 注意：一次最多提交 50 种菜品，单个菜品数量必须为 1~99；Controller、Service 和数据库 `CHECK` 约束三层校验
 > 注意：`userId` 可空 — 顾客扫码时会被 JWT 中的 userId 覆盖（防冒名）；**员工代点餐时不传**（`placeOrder` 仅覆盖顾客 token 的 userId），订单 `user_id` 为 null，归属桌台
 
 **响应（首次点餐）**:
@@ -635,6 +636,7 @@ mvn test
 ### 测试策略
 
 - **框架**: JUnit 5 + `@SpringBootTest`
+- **环境隔离**: 所有 Spring 集成测试强制使用 `test` Profile，默认连接本机 `restaurant_management_test`，不读取部署环境数据库
 - **事务**: 测试**不使用** `@Transactional` 自动回滚（`updateStatus` 用 REQUIRES_NEW，测试数据必须真实提交才能被读到），改为 `@BeforeEach`/`@AfterEach` 手动清理
 - **清理策略**: 测试数据有固定命名（桌台/菜品），`@BeforeEach` 先按命名清掉历史残留再创建新数据——即使上次运行被中断，下次运行也会自动自愈，不污染数据库
 - **每个测试方法独立运行**，不依赖执行顺序
@@ -653,7 +655,7 @@ mvn test
 | `shouldVersionIncrementCorrectly` | 连续操作version正确累加 |
 | `shouldThrowWhenTableNotExists` | 不存在的桌台抛异常 |
 
-**OrdersServiceTest（21个用例）**:
+**OrdersServiceTest（28个测试方法）**:
 
 | 用例分类 | 用例 | 验证点 |
 |------|------|------|
@@ -662,12 +664,16 @@ mvn test
 | 加菜 | `shouldAddItemsToExistingOrder` | 同一订单追加 + 总价更新 |
 | | `shouldAddItemsMultipleTimes` | 多次加菜累加正确 |
 | | `multiplePeopleSameTableShouldAddToSameOrder` | 三人同桌共享订单 |
+| | `shouldAllowAddItemsInEveryActiveStatus` | 状态1~4均可加菜 |
+| 并发 | `concurrentCheckoutShouldOnlySucceedOnce` | 重复20轮验证并发结账仅一个成功、仅一条日志、营业额不重复 |
+| | `concurrentOrdersOnPreOccupiedTableShouldShareOneActiveOrder` | 重复20轮验证异常预占桌并发下单归并为一个订单 |
 | 释放+再点 | `shouldReleaseTableAfterSettlement` | 结账→桌台释放 |
 | | `shouldReleaseTableAfterCancel` | 取消→桌台释放 |
 | | `shouldCreateNewOrderAfterPreviousSettled` | 释放后新客人建新订单 |
 | 菜品校验 | `shouldFailWhenDishNotExists` | 不存在菜品拒绝 |
 | | `shouldFailWhenDishOffSale` | 下架菜品拒绝（首次） |
 | | `shouldFailWhenAddItemsWithOffSaleDish` | 下架菜品拒绝（加菜） |
+| 数量校验 | `shouldRejectInvalidQuantitiesAtServiceBoundary` 等 | Service直调仍拒绝空值、负数、0、超过99和超过50种菜品 |
 | 角色权限 | `chefShouldTransitionFromPendingToCooking` | 后厨 1→2 |
 | | `chefShouldNotTransitionToServing` | 后厨不能上菜 |
 | | `waiterShouldTransitionFromCookingToServing` | 服务员 2→3 |
@@ -694,6 +700,12 @@ mvn test
 |------|------|
 | `shouldRejectDuplicatePhoneWithFriendlyMessage` | 重复手机号注册返回"手机号已被注册"友好提示 |
 | `shouldRejectDuplicatePhoneAtDbLevel` | 绕过 Service 查重直接插入 → DB 唯一索引兜底抛 `DuplicateKeyException` |
+
+**新增边界与数据库约束测试（10个测试方法）**:
+
+- `ScanOrderDTOValidationTest`：验证嵌套 `Item` 级联校验、null元素、数量上下限和菜品种类上限。
+- `OrdersServiceImplUnitTest`：确定性模拟“查询时活跃、拿锁时已结账”和“活跃订单唯一冲突转加菜”。
+- `ActiveOrderConstraintTest`：验证同桌第二个活跃订单被数据库拒绝，终态订单及空桌订单不受影响。
 
 ---
 
@@ -747,6 +759,10 @@ mvn test
 | 订单列表分页 | `LIMIT offset, size` + 参数校验（size 上限 100） | 防止全量返回导致内存/网络压力 |
 | 桌台并发 | CAS 乐观锁（version + WHERE 条件） | 防止重复占用 |
 | 加菜并发 | SELECT FOR UPDATE 行锁 | 防止丢失更新 |
+| 加菜终态复检 | 拿到订单行锁后重新校验状态1~4 | 防止等待锁期间已结账的订单继续加菜 |
+| 状态流转并发 | `UPDATE ... WHERE id=? AND status=?` CAS + 检查影响行数 | 防止重复结账、重复状态日志和营业额重复统计 |
+| 活跃订单唯一性 | 生成列 `active_table_id` + 唯一索引 | 数据库保证每桌最多一个状态1~4订单 |
+| 数量边界 | DTO级联校验 + Service兜底 + DB CHECK | 防止负数、0或超大数量造成错账 |
 | 异常统一处理 | GlobalExceptionHandler | 不泄露内部错误细节 |
 | 审计日志 | OrderStatusLog（订单状态流转） | 营业额统计依据 |
 
@@ -777,7 +793,11 @@ CREATE TABLE orders (
     table_id BIGINT,                    -- 关联桌台
     status INT DEFAULT 1,               -- 0取消 1待制作 2制作中 3上菜 4用餐中 5已结账
     total_amount DECIMAL(10,2),         -- 订单总金额（后端重算）
-    create_time DATETIME
+    create_time DATETIME,
+    active_table_id BIGINT GENERATED ALWAYS AS (
+        CASE WHEN status IN (1,2,3,4) THEN table_id ELSE NULL END
+    ) STORED,
+    UNIQUE KEY uk_orders_active_table (active_table_id)
 );
 ```
 
@@ -788,11 +808,20 @@ CREATE TABLE order_detail (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     order_id BIGINT,                    -- 关联订单
     dish_id BIGINT,                     -- 菜品ID
-    amount INT,                         -- 数量
+    amount INT NOT NULL,                -- 数量，限制1~99
     price DECIMAL(10,2),                -- 下单时的菜品单价
-    FOREIGN KEY (order_id) REFERENCES orders(id)
+    CONSTRAINT chk_order_detail_amount CHECK (amount BETWEEN 1 AND 99)
 );
 ```
+
+### 已部署环境增量迁移
+
+已有数据库不会因为更新 `init.sql` 自动获得新约束。发布新版应用前后需按文件内说明依次执行：
+
+1. `db/migration/20260814_01_order_detail_amount_check.sql`：先检查异常数量，再增加数量 `CHECK`；
+2. `db/migration/20260814_02_one_active_order_per_table.sql`：先检查重复活跃订单和桌台状态，再增加生成列唯一索引。
+
+只读检查返回异常记录时必须人工核对，不能直接执行DDL或自动删除订单。
 
 ### 订单状态日志表
 
