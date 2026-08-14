@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -37,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 因此不用 @Transactional 自动回滚，改为 @AfterEach 手动清理。
  */
 @SpringBootTest
+@ActiveProfiles("test")
 class OrdersServiceTest {
 
     @Autowired

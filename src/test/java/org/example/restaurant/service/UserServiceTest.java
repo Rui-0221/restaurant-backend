@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -25,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 测试用固定手机号，@BeforeEach/@AfterEach 按号码清理，中断运行可自愈。
  */
 @SpringBootTest
+@ActiveProfiles("test")
 class UserServiceTest {
 
     @Autowired

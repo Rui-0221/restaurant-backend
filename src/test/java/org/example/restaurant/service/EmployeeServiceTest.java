@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -29,6 +30,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * 即使上次运行被中断，下次运行也会自动自愈。
  */
 @SpringBootTest
+@ActiveProfiles("test")
 class EmployeeServiceTest {
 
     @Autowired
