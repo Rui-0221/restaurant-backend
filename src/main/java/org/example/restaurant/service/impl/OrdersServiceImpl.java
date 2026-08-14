@@ -238,6 +238,11 @@ public class OrdersServiceImpl implements OrdersService {
         if (order == null) {
             throw new BusinessException("订单不存在");
         }
+        // 初次查询到活跃订单后，等待行锁期间订单可能已经被取消或结账。
+        // 必须以锁定后的最新状态为准，避免向终态订单继续追加金额和明细。
+        if (!canAddItems(order.getStatus())) {
+            throw new BusinessException("订单已取消或已结账，不能继续加菜");
+        }
 
         // 2. 校验新菜品
         DishAndDetail result = validateAndBuildDetails(items);
@@ -272,6 +277,10 @@ public class OrdersServiceImpl implements OrdersService {
 
         // 6. 查询全部明细（旧的+新的）用于返回
         return buildOrderVO(order);
+    }
+
+    private boolean canAddItems(Integer status) {
+        return status != null && status >= 1 && status <= 4;
     }
 
     /**

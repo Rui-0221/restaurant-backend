@@ -210,6 +210,25 @@ class OrdersServiceTest {
     }
 
     @Test
+    void shouldAllowAddItemsInEveryActiveStatus() {
+        OrderVO created = ordersService.placeOrder(
+                buildDTO(testTableId, List.of(item(onSaleDishId, 1))));
+
+        ordersService.placeOrder(buildDTO(testTableId, List.of(item(onSaleDishId, 1))));
+        ordersService.updateOrderStatus(created.getId(), 2, 1);
+        ordersService.placeOrder(buildDTO(testTableId, List.of(item(onSaleDishId, 1))));
+        ordersService.updateOrderStatus(created.getId(), 3, 1);
+        ordersService.placeOrder(buildDTO(testTableId, List.of(item(onSaleDishId, 1))));
+        ordersService.updateOrderStatus(created.getId(), 4, 1);
+        OrderVO diningOrder = ordersService.placeOrder(
+                buildDTO(testTableId, List.of(item(onSaleDishId, 1))));
+
+        assertEquals(4, diningOrder.getStatus());
+        assertEquals(new BigDecimal("149.50"), diningOrder.getTotalAmount());
+        assertEquals(5, diningOrder.getDetails().size());
+    }
+
+    @Test
     void multiplePeopleSameTableShouldAddToSameOrder() {
         // 张三先扫码下单
         ordersService.placeOrder(buildDTO(testTableId, List.of(item(onSaleDishId, 1))));
