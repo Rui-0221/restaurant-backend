@@ -10,6 +10,7 @@ import org.example.restaurant.entity.TableInfo;
 import org.example.restaurant.mapper.*;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -19,6 +20,11 @@ import org.springframework.test.context.ActiveProfiles;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -425,6 +431,56 @@ class OrdersServiceTest {
         ordersService.updateOrderStatus(order.getId(), 4, 1);
         ordersService.updateOrderStatus(order.getId(), 5, 2);
         assertEquals(5, ordersService.getById(order.getId()).getStatus());
+    }
+
+    @RepeatedTest(20)
+    void concurrentCheckoutShouldOnlySucceedOnce() throws Exception {
+        Orders order = createTestOrder();
+        ordersService.updateOrderStatus(order.getId(), 2, 1);
+        ordersService.updateOrderStatus(order.getId(), 3, 1);
+        ordersService.updateOrderStatus(order.getId(), 4, 1);
+        BigDecimal revenueBefore = ordersService.todayRevenue();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            java.util.concurrent.Callable<Boolean> checkout = () -> {
+                UserContext.setEmployeeId(2L);
+                UserContext.setRole(2);
+                ready.countDown();
+                start.await(5, TimeUnit.SECONDS);
+                try {
+                    ordersService.updateOrderStatus(order.getId(), 5, 2);
+                    return true;
+                } catch (BusinessException expectedConflict) {
+                    return false;
+                } finally {
+                    UserContext.clear();
+                }
+            };
+
+            Future<Boolean> first = executor.submit(checkout);
+            Future<Boolean> second = executor.submit(checkout);
+            assertTrue(ready.await(5, TimeUnit.SECONDS), "两个结账线程应准备就绪");
+            start.countDown();
+
+            int successCount = (first.get(10, TimeUnit.SECONDS) ? 1 : 0)
+                    + (second.get(10, TimeUnit.SECONDS) ? 1 : 0);
+            assertEquals(1, successCount, "同一订单并发结账只能有一个请求成功");
+        } finally {
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "结账线程池应正常结束");
+        }
+
+        assertEquals(5, ordersService.getById(order.getId()).getStatus());
+        Integer settlementLogs = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM order_status_log WHERE order_id=? AND to_status=5",
+                Integer.class, order.getId());
+        assertEquals(1, settlementLogs, "只能记录一条结账日志");
+        assertEquals(0, tableInfoService.getById(testTableId).getStatus(), "结账后桌台应释放");
+        assertEquals(0, revenueBefore.add(order.getTotalAmount()).compareTo(ordersService.todayRevenue()),
+                "并发结账不能让营业额重复累计");
     }
 
     @Test

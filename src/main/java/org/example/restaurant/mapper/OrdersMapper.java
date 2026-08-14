@@ -26,6 +26,16 @@ public interface OrdersMapper {
     @Update("UPDATE orders SET status=#{status} WHERE id=#{id}")
     void updateStatus(@Param("id") Long id, @Param("status") Integer status);
 
+    /**
+     * 订单状态 CAS：只有数据库中的当前状态仍等于 expectedStatus 时才更新。
+     * 返回 0 表示订单已被其他请求推进，调用方不得记录日志或执行状态副作用。
+     */
+    @Update("UPDATE orders SET status=#{targetStatus} " +
+            "WHERE id=#{orderId} AND status=#{expectedStatus}")
+    int updateStatusCas(@Param("orderId") Long orderId,
+                        @Param("expectedStatus") Integer expectedStatus,
+                        @Param("targetStatus") Integer targetStatus);
+
     @Select("SELECT * FROM orders WHERE table_id=#{tableId} AND status IN (1,2,3,4)")
     List<Orders> findActiveByTableId(Long tableId);
 

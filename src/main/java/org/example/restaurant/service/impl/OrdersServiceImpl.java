@@ -387,9 +387,13 @@ public class OrdersServiceImpl implements OrdersService {
             throw new BusinessException("无权或非法状态变更: " + current + " → " + targetStatus);
         }
 
-        ordersMapper.updateStatus(orderId, targetStatus);
+        // 状态 CAS：防止两个并发请求都基于同一个旧状态执行成功。
+        int updatedRows = ordersMapper.updateStatusCas(orderId, current, targetStatus);
+        if (updatedRows != 1) {
+            throw new BusinessException("订单状态已发生变化，请刷新后重试");
+        }
 
-        // 记录状态变更日志
+        // 只有 CAS 成功后才记录日志并执行结账/取消的副作用
         Long operatorId = UserContext.getEmployeeId();
         OrderStatusLog log = new OrderStatusLog(orderId, current, targetStatus, operatorId, LocalDateTime.now());
         orderStatusLogMapper.insert(log);
