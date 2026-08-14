@@ -12,6 +12,7 @@ import org.example.restaurant.websocket.KitchenWebSocketHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -189,7 +190,22 @@ public class OrdersServiceImpl implements OrdersService {
             order.setTotalAmount(result.total);
             order.setStatus(1);
             order.setCreateTime(LocalDateTime.now());
-            ordersMapper.insert(order);
+            try {
+                ordersMapper.insert(order);
+            } catch (DuplicateKeyException e) {
+                if (!isActiveOrderUniqueConflict(e)) {
+                    throw e;
+                }
+
+                // 数据库唯一约束判定另一请求已经为该桌创建了活跃订单。
+                // 使用锁定当前读绕过外层 REPEATABLE READ 快照，再安全转为加菜。
+                List<Orders> concurrentOrders =
+                        ordersMapper.findActiveByTableIdForUpdate(dto.getTableId());
+                if (concurrentOrders != null && !concurrentOrders.isEmpty()) {
+                    return addItemsToOrder(concurrentOrders.get(0).getId(), dto.getItems());
+                }
+                throw new BusinessException("桌台订单已被其他请求创建，请刷新后重试");
+            }
 
             // 4. 批量插入订单明细
             List<OrderDetail> details = result.details;
@@ -281,6 +297,18 @@ public class OrdersServiceImpl implements OrdersService {
 
     private boolean canAddItems(Integer status) {
         return status != null && status >= 1 && status <= 4;
+    }
+
+    private boolean isActiveOrderUniqueConflict(DuplicateKeyException exception) {
+        Throwable current = exception;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null && message.contains("uk_orders_active_table")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     /**

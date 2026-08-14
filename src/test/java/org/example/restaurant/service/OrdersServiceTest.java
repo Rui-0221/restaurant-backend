@@ -248,6 +248,42 @@ class OrdersServiceTest {
         assertEquals(3, wangwuOrder.getDetails().size());
     }
 
+    @RepeatedTest(20)
+    void concurrentOrdersOnPreOccupiedTableShouldShareOneActiveOrder() throws Exception {
+        tableInfoService.updateStatus(testTableId, 1);
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            java.util.concurrent.Callable<OrderVO> placeOrder = () -> {
+                ready.countDown();
+                start.await(5, TimeUnit.SECONDS);
+                return ordersService.placeOrder(
+                        buildDTO(testTableId, List.of(item(onSaleDishId, 1))));
+            };
+
+            Future<OrderVO> first = executor.submit(placeOrder);
+            Future<OrderVO> second = executor.submit(placeOrder);
+            assertTrue(ready.await(5, TimeUnit.SECONDS), "两个下单线程应准备就绪");
+            start.countDown();
+
+            OrderVO firstResult = first.get(10, TimeUnit.SECONDS);
+            OrderVO secondResult = second.get(10, TimeUnit.SECONDS);
+            assertEquals(firstResult.getId(), secondResult.getId(), "并发下单应归并到同一活跃订单");
+        } finally {
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "下单线程池应正常结束");
+        }
+
+        List<Orders> activeOrders = ordersMapper.findActiveByTableId(testTableId);
+        assertEquals(1, activeOrders.size(), "同一桌只能有一个活跃订单");
+        OrderVO active = ordersService.getActiveOrderByTable(testTableId);
+        assertEquals(new BigDecimal("59.80"), active.getTotalAmount());
+        assertEquals(2, active.getDetails().size());
+        assertEquals(1, tableInfoService.getById(testTableId).getStatus());
+    }
+
     // ==================== 结账释放桌台 + 再次点餐 ====================
 
     @Test

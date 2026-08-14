@@ -90,9 +90,13 @@ CREATE TABLE IF NOT EXISTS orders (
     status INT DEFAULT 1 COMMENT '状态: 0取消/1待制作/2制作中/3上菜/4用餐中/5已结账',
     total_amount DECIMAL(10,2) DEFAULT 0.00 COMMENT '订单总金额(后端重算)',
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    active_table_id BIGINT GENERATED ALWAYS AS (
+        CASE WHEN status IN (1,2,3,4) THEN table_id ELSE NULL END
+    ) STORED COMMENT '活跃订单桌台ID(唯一约束辅助列)',
     INDEX idx_table (table_id),
     INDEX idx_status (status),
-    INDEX idx_create_time (create_time)
+    INDEX idx_create_time (create_time),
+    UNIQUE KEY uk_orders_active_table (active_table_id)
 ) COMMENT '订单表';
 
 -- ============================================
