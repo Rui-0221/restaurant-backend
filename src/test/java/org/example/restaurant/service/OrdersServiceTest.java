@@ -329,6 +329,55 @@ class OrdersServiceTest {
                 "加菜时也不能点已下架菜品");
     }
 
+    @Test
+    void shouldRejectInvalidQuantitiesAtServiceBoundary() {
+        assertOrderRejectedAndTableReleased(buildDTO(testTableId, List.of(item(onSaleDishId, -1))));
+        assertOrderRejectedAndTableReleased(buildDTO(testTableId, List.of(item(onSaleDishId, 0))));
+        assertOrderRejectedAndTableReleased(buildDTO(testTableId, List.of(item(onSaleDishId, 100))));
+
+        ScanOrderDTO.Item nullAmount = new ScanOrderDTO.Item();
+        nullAmount.setDishId(onSaleDishId);
+        assertOrderRejectedAndTableReleased(buildDTO(testTableId, List.of(nullAmount)));
+    }
+
+    @Test
+    void shouldRejectMalformedItemListsAtServiceBoundary() {
+        ScanOrderDTO nullItems = buildDTO(testTableId, List.of(item(onSaleDishId, 1)));
+        nullItems.setItems(null);
+        assertOrderRejectedAndTableReleased(nullItems);
+
+        ScanOrderDTO emptyItems = buildDTO(testTableId, List.of(item(onSaleDishId, 1)));
+        emptyItems.setItems(List.of());
+        assertOrderRejectedAndTableReleased(emptyItems);
+
+        List<ScanOrderDTO.Item> containingNull = new java.util.ArrayList<>();
+        containingNull.add(null);
+        assertOrderRejectedAndTableReleased(buildDTO(testTableId, containingNull));
+
+        ScanOrderDTO.Item nullDishId = new ScanOrderDTO.Item();
+        nullDishId.setAmount(1);
+        assertOrderRejectedAndTableReleased(buildDTO(testTableId, List.of(nullDishId)));
+    }
+
+    @Test
+    void shouldRejectMoreThanFiftyDishKindsAtServiceBoundary() {
+        List<ScanOrderDTO.Item> items = new java.util.ArrayList<>();
+        for (int i = 0; i < 51; i++) {
+            items.add(item(onSaleDishId, 1));
+        }
+
+        assertOrderRejectedAndTableReleased(buildDTO(testTableId, items));
+    }
+
+    @Test
+    void shouldAcceptMaximumQuantityAtServiceBoundary() {
+        OrderVO vo = ordersService.placeOrder(
+                buildDTO(testTableId, List.of(item(onSaleDishId, 99))));
+
+        assertEquals(new BigDecimal("2960.10"), vo.getTotalAmount());
+        assertEquals(99, vo.getDetails().get(0).getAmount());
+    }
+
     // ==================== 订单状态流转 + 角色权限 ====================
 
     private Orders createTestOrder() {
@@ -430,6 +479,14 @@ class OrdersServiceTest {
         dto.setUserId(1L);
         dto.setItems(items);
         return dto;
+    }
+
+    private void assertOrderRejectedAndTableReleased(ScanOrderDTO dto) {
+        assertThrows(BusinessException.class, () -> ordersService.placeOrder(dto));
+        assertTrue(ordersMapper.findActiveByTableId(testTableId).isEmpty(),
+                "非法请求不能留下活跃订单");
+        assertEquals(0, tableInfoService.getById(testTableId).getStatus(),
+                "非法请求不能让桌台卡在占用状态");
     }
 
     private ScanOrderDTO.Item item(Long dishId, int amount) {

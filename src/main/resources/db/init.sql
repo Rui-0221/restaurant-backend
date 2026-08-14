@@ -104,7 +104,8 @@ CREATE TABLE IF NOT EXISTS order_detail (
     dish_id BIGINT NOT NULL COMMENT '菜品ID',
     amount INT NOT NULL DEFAULT 1 COMMENT '数量',
     price DECIMAL(10,2) NOT NULL COMMENT '下单时的单价(数据快照)',
-    INDEX idx_order (order_id)
+    INDEX idx_order (order_id),
+    CONSTRAINT chk_order_detail_amount CHECK (amount BETWEEN 1 AND 99)
 ) COMMENT '订单明细表';
 
 -- ============================================

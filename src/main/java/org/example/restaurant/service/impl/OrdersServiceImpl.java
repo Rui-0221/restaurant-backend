@@ -29,6 +29,8 @@ import java.util.stream.Collectors;
 public class OrdersServiceImpl implements OrdersService {
 
     private static final Logger log = LoggerFactory.getLogger(OrdersServiceImpl.class);
+    private static final int MAX_DISH_KINDS_PER_REQUEST = 50;
+    private static final int MAX_AMOUNT_PER_DISH = 99;
 
     @Autowired
     private OrdersMapper ordersMapper;
@@ -118,6 +120,11 @@ public class OrdersServiceImpl implements OrdersService {
     @Override
     @Transactional
     public OrderVO placeOrder(ScanOrderDTO dto) {
+        if (dto == null) {
+            throw new BusinessException("点餐请求不能为空");
+        }
+        validateRequestedItems(dto.getItems());
+
         // 0. 用 JWT 中的 userId 覆盖前端传的值，防止冒名下单
         Long currentUser = UserContext.getUserId();
         if (currentUser != null) {
@@ -301,6 +308,8 @@ public class OrdersServiceImpl implements OrdersService {
      * 校验菜品并重算金额（后端强制计算，不信任前端任何价格数据）
      */
     private DishAndDetail validateAndBuildDetails(List<ScanOrderDTO.Item> items) {
+        validateRequestedItems(items);
+
         BigDecimal total = BigDecimal.ZERO;
         List<OrderDetail> details = new ArrayList<>();
         Map<Long, String> dishNameMap = new java.util.HashMap<>();
@@ -323,6 +332,35 @@ public class OrdersServiceImpl implements OrdersService {
         }
 
         return new DishAndDetail(total, details, dishNameMap);
+    }
+
+    /**
+     * Service 层参数兜底。Controller 的 Bean Validation 只覆盖 HTTP 入口，
+     * Service 被测试、定时任务或其他组件直接调用时仍必须守住相同的数量边界。
+     */
+    private void validateRequestedItems(List<ScanOrderDTO.Item> items) {
+        if (items == null || items.isEmpty()) {
+            throw new BusinessException("菜品列表不能为空");
+        }
+        if (items.size() > MAX_DISH_KINDS_PER_REQUEST) {
+            throw new BusinessException("一次最多提交50种菜品");
+        }
+
+        for (ScanOrderDTO.Item item : items) {
+            if (item == null) {
+                throw new BusinessException("菜品项不能为空");
+            }
+            if (item.getDishId() == null) {
+                throw new BusinessException("菜品ID不能为空");
+            }
+            Integer amount = item.getAmount();
+            if (amount == null) {
+                throw new BusinessException("数量不能为空");
+            }
+            if (amount < 1 || amount > MAX_AMOUNT_PER_DISH) {
+                throw new BusinessException("菜品数量必须在1到99之间");
+            }
+        }
     }
 
     // ==================== 订单状态流转 + 角色联动（改造：结账/取消自动释放桌台）====================
