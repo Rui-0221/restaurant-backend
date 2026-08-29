@@ -6,6 +6,9 @@ application-*.local.yml
 # 部署目录：restaurant.service 含真实密码，禁止提交（nginx 配置无密码可提交）
 deploy/restaurant.service
 
+# 本地部署说明，不上传到远程仓库
+/DEPLOY.md
+
 # 环境变量文件
 .env
 .env.*
