@@ -13,6 +13,9 @@ import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -22,8 +25,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @ActiveProfiles("test")
 class ActiveOrderConstraintTest {
 
-    private static final String TEST_TABLE_NAME = "测试桌活跃约束T1";
-
     @Autowired
     private OrdersMapper ordersMapper;
     @Autowired
@@ -32,12 +33,15 @@ class ActiveOrderConstraintTest {
     private JdbcTemplate jdbcTemplate;
 
     private Long tableId;
+    private String testTableName;
+    private final List<Long> createdOrderIds = new ArrayList<>();
 
     @BeforeEach
     void setUp() {
-        deleteTestData();
+        testTableName = "IT-活跃约束-" + UUID.randomUUID();
+        createdOrderIds.clear();
         TableInfo table = new TableInfo();
-        table.setName(TEST_TABLE_NAME);
+        table.setName(testTableName);
         table.setCapacity(4);
         table.setStatus(1);
         tableInfoMapper.insert(table);
@@ -86,13 +90,18 @@ class ActiveOrderConstraintTest {
         order.setTotalAmount(BigDecimal.TEN);
         order.setCreateTime(LocalDateTime.now());
         ordersMapper.insert(order);
+        createdOrderIds.add(order.getId());
         return order;
     }
 
     private void deleteTestData() {
-        jdbcTemplate.update("DELETE FROM orders WHERE table_id IN " +
-                "(SELECT id FROM table_info WHERE name=?)", TEST_TABLE_NAME);
-        jdbcTemplate.update("DELETE FROM table_info WHERE name=?", TEST_TABLE_NAME);
-        jdbcTemplate.update("DELETE FROM orders WHERE table_id IS NULL AND user_id=1 AND total_amount=10.00");
+        for (Long orderId : createdOrderIds) {
+            jdbcTemplate.update("DELETE FROM order_status_log WHERE order_id=?", orderId);
+            jdbcTemplate.update("DELETE FROM order_detail WHERE order_id=?", orderId);
+            jdbcTemplate.update("DELETE FROM orders WHERE id=?", orderId);
+        }
+        if (tableId != null) {
+            jdbcTemplate.update("DELETE FROM table_info WHERE id=?", tableId);
+        }
     }
 }

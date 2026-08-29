@@ -69,6 +69,43 @@ class OrdersServiceImplUnitTest {
     }
 
     @Test
+    void shouldConvertIdleTableCasConflictToAddItems() {
+        TableInfo idleTable = new TableInfo();
+        idleTable.setId(1L);
+        idleTable.setStatus(0);
+        idleTable.setVersion(0);
+        when(tableInfoService.getById(1L)).thenReturn(idleTable);
+        when(tableInfoService.tryOccupy(1L, 0)).thenReturn(false);
+        when(ordersMapper.findActiveByTableId(1L)).thenReturn(Collections.emptyList());
+
+        Dish dish = new Dish();
+        dish.setId(10L);
+        dish.setName("测试菜品");
+        dish.setStatus(1);
+        dish.setPrice(new BigDecimal("10.00"));
+        when(dishMapper.findById(10L)).thenReturn(dish);
+
+        Orders winner = order(42L, 1);
+        when(ordersMapper.findActiveByTableIdForUpdate(1L)).thenReturn(List.of(winner));
+        when(ordersMapper.findByIdForUpdate(42L)).thenReturn(winner);
+        when(orderDetailMapper.findByOrderId(42L)).thenReturn(Collections.emptyList());
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            OrderVO result = ordersService.placeOrder(dto(1L, 10L, 1));
+            assertEquals(42L, result.getId());
+            assertEquals(new BigDecimal("30.00"), result.getTotalAmount());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+
+        verify(tableInfoService).tryOccupy(1L, 0);
+        verify(tableInfoService, never()).updateStatus(anyLong(), anyInt());
+        verify(ordersMapper).findActiveByTableIdForUpdate(1L);
+        verify(orderDetailMapper).batchInsert(any());
+    }
+
+    @Test
     void shouldConvertActiveOrderUniqueConflictToAddItems() {
         TableInfo occupiedTable = new TableInfo();
         occupiedTable.setId(1L);

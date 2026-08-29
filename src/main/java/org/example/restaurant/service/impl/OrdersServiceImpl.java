@@ -146,31 +146,23 @@ public class OrdersServiceImpl implements OrdersService {
     }
 
     /**
-     * 首次点餐：占桌台 + 创建订单
+     * 首次点餐：在 placeOrder 外层事务中占桌台并创建订单。
      *
-     * 并发处理：如果占桌台的CAS失败（说明另一请求已抢先占了该桌台），
-     * 尝试重查活跃订单转为加菜；但外层事务是REPEATABLE READ快照读，
-     * 对方订单未提交时重查为空，只能抛异常由客户端重试（重试后走加菜分支）
+     * 并发处理：空闲桌台的 CAS 冲突只返回 false，随后用锁定当前读查找
+     * 已经提交的胜方订单并转为加菜；占桌台和订单创建共用一个事务边界。
      */
     private OrderVO createNewOrder(ScanOrderDTO dto) {
-        // 1. 占用桌台（乐观锁防并发）
-        //    如果桌台空闲(0)，则占用(1)
-        boolean tableOccupiedByMe = false;
+        // 1. 占用桌台（乐观锁防并发）；CAS 与订单创建加入同一外层事务
         TableInfo table = tableInfoService.getById(dto.getTableId());
         if (table.getStatus() == 0) {
-            try {
-                tableInfoService.updateStatus(dto.getTableId(), 1);
-                tableOccupiedByMe = true;
-            } catch (BusinessException e) {
-                // CAS冲突：另一请求已抢先占用桌台
-                // 注：CAS 的 UPDATE 被对方行锁挡住，失败时对方事务必已结束；
-                // 用 FOR UPDATE 锁读绕过 REPEATABLE READ 快照，必然能看到已提交的订单 → 自动转加菜
+            boolean occupied = tableInfoService.tryOccupy(dto.getTableId(), table.getVersion());
+            if (!occupied) {
+                // CAS 冲突后用锁定当前读绕过 REPEATABLE READ 快照，转为加菜
                 List<Orders> activeOrders = ordersMapper.findActiveByTableIdForUpdate(dto.getTableId());
                 if (activeOrders != null && !activeOrders.isEmpty()) {
                     return addItemsToOrder(activeOrders.get(0).getId(), dto.getItems());
                 }
-                // 极端情况：桌台被占但没有订单（不应发生），重抛原异常
-                throw e;
+                throw new BusinessException("桌台状态已被其他操作变更，请刷新后重试");
             }
         } else if (table.getStatus() == 1) {
             // 桌台状态=1但无活跃订单（异常边缘情况）
@@ -179,67 +171,55 @@ public class OrdersServiceImpl implements OrdersService {
             log.warn("桌台 {} 状态为占用(1)但无活跃订单，继续创建", dto.getTableId());
         }
 
-        // 2-4. 校验菜品 + 创建订单 + 明细（失败时需回滚桌台占用）
+        // 2-4. 校验菜品 + 创建订单 + 明细；异常时由外层事务统一回滚桌台占用
+        DishAndDetail result = validateAndBuildDetails(dto.getItems());
+
+        // 3. 插入订单（状态=1 待制作）
+        Orders order = new Orders();
+        order.setTableId(dto.getTableId());
+        order.setUserId(dto.getUserId());
+        order.setTotalAmount(result.total);
+        order.setStatus(1);
+        order.setCreateTime(LocalDateTime.now());
         try {
-            DishAndDetail result = validateAndBuildDetails(dto.getItems());
-
-            // 3. 插入订单（状态=1 待制作）
-            Orders order = new Orders();
-            order.setTableId(dto.getTableId());
-            order.setUserId(dto.getUserId());
-            order.setTotalAmount(result.total);
-            order.setStatus(1);
-            order.setCreateTime(LocalDateTime.now());
-            try {
-                ordersMapper.insert(order);
-            } catch (DuplicateKeyException e) {
-                if (!isActiveOrderUniqueConflict(e)) {
-                    throw e;
-                }
-
-                // 数据库唯一约束判定另一请求已经为该桌创建了活跃订单。
-                // 使用锁定当前读绕过外层 REPEATABLE READ 快照，再安全转为加菜。
-                List<Orders> concurrentOrders =
-                        ordersMapper.findActiveByTableIdForUpdate(dto.getTableId());
-                if (concurrentOrders != null && !concurrentOrders.isEmpty()) {
-                    return addItemsToOrder(concurrentOrders.get(0).getId(), dto.getItems());
-                }
-                throw new BusinessException("桌台订单已被其他请求创建，请刷新后重试");
+            ordersMapper.insert(order);
+        } catch (DuplicateKeyException e) {
+            if (!isActiveOrderUniqueConflict(e)) {
+                throw e;
             }
 
-            // 4. 批量插入订单明细
-            List<OrderDetail> details = result.details;
-            details.forEach(d -> d.setOrderId(order.getId()));
-            orderDetailMapper.batchInsert(details);
-
-            // 5. 事务提交后再执行 WebSocket 通知，避免占用数据库连接
-            TransactionSynchronizationManager.registerSynchronization(
-                    new TransactionSynchronization() {
-                        @Override
-                        public void afterCommit() {
-                            log.info("新订单已创建：orderId={}, tableId={}, items={}",
-                                    order.getId(), order.getTableId(), details.size());
-
-                            try {
-                                kitchenWebSocketHandler.notifyNewOrder(order.getId(), dto.getTableId(), details.size());
-                            } catch (Exception e) {
-                                log.error("WebSocket 通知失败", e);
-                            }
-                        }
-                    });
-
-            return OrderVO.from(order, details, result.dishNameMap);
-        } catch (Exception e) {
-            // 订单创建失败：如果本请求已占用桌台，需释放，避免桌台卡死
-            if (tableOccupiedByMe) {
-                try {
-                    tableInfoService.updateStatus(dto.getTableId(), 0);
-                } catch (Exception releaseEx) {
-                    log.error("订单创建失败后释放桌台失败: tableId={}", dto.getTableId(), releaseEx);
-                }
+            // 数据库唯一约束判定另一请求已经为该桌创建了活跃订单。
+            // 使用锁定当前读绕过外层 REPEATABLE READ 快照，再安全转为加菜。
+            List<Orders> concurrentOrders =
+                    ordersMapper.findActiveByTableIdForUpdate(dto.getTableId());
+            if (concurrentOrders != null && !concurrentOrders.isEmpty()) {
+                return addItemsToOrder(concurrentOrders.get(0).getId(), dto.getItems());
             }
-            throw e;
+            throw new BusinessException("桌台订单已被其他请求创建，请刷新后重试");
         }
+
+        // 4. 批量插入订单明细
+        List<OrderDetail> details = result.details;
+        details.forEach(d -> d.setOrderId(order.getId()));
+        orderDetailMapper.batchInsert(details);
+
+        // 5. 事务提交后再执行 WebSocket 通知，避免占用数据库连接
+        TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        log.info("新订单已创建：orderId={}, tableId={}, items={}",
+                                order.getId(), order.getTableId(), details.size());
+
+                        try {
+                            kitchenWebSocketHandler.notifyNewOrder(order.getId(), dto.getTableId(), details.size());
+                        } catch (Exception e) {
+                            log.error("WebSocket 通知失败", e);
+                        }
+                    }
+                });
+
+        return OrderVO.from(order, details, result.dishNameMap);
     }
 
     /**

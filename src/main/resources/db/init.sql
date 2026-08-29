@@ -5,6 +5,8 @@
 -- 注意: 会先删除旧表再重建，确保表结构与代码匹配
 -- ============================================
 
+SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
+
 CREATE DATABASE IF NOT EXISTS restaurant_management
     CHARACTER SET utf8mb4
     COLLATE utf8mb4_unicode_ci;
@@ -12,9 +14,11 @@ CREATE DATABASE IF NOT EXISTS restaurant_management
 USE restaurant_management;
 
 -- 清空旧表（确保结构与代码完全匹配）
+DROP TABLE IF EXISTS ai_order_submission;
 DROP TABLE IF EXISTS order_status_log;
 DROP TABLE IF EXISTS order_detail;
 DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS dish_ai_profile;
 DROP TABLE IF EXISTS dish;
 DROP TABLE IF EXISTS category;
 DROP TABLE IF EXISTS user;
@@ -81,7 +85,29 @@ CREATE TABLE IF NOT EXISTS dish (
 ) COMMENT '菜品表';
 
 -- ============================================
--- 5. 订单表
+-- 5. 菜品AI手册
+-- ============================================
+CREATE TABLE IF NOT EXISTS dish_ai_profile (
+    dish_id BIGINT PRIMARY KEY COMMENT '菜品ID',
+    cuisine VARCHAR(50) COMMENT '菜系',
+    taste_tags VARCHAR(255) COMMENT '口味标签，逗号分隔',
+    spicy_level TINYINT UNSIGNED DEFAULT 0 COMMENT '辣度: 0-5',
+    ingredients VARCHAR(1000) COMMENT '主要配料，逗号分隔',
+    allergens VARCHAR(500) COMMENT '过敏原，逗号分隔；NONE表示已确认无已知过敏原',
+    dietary_tags VARCHAR(255) COMMENT '饮食标签，逗号分隔',
+    is_signature TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否招牌菜',
+    signature_rank INT COMMENT '招牌排序',
+    recommendation_notes VARCHAR(1000) COMMENT '推荐说明',
+    serving_people INT COMMENT '建议用餐人数',
+    profile_status ENUM('VERIFIED', 'INCOMPLETE') NOT NULL DEFAULT 'INCOMPLETE' COMMENT '资料状态',
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_dish_ai_profile_dish FOREIGN KEY (dish_id) REFERENCES dish(id) ON DELETE CASCADE,
+    INDEX idx_dish_ai_profile_catalog (profile_status, is_signature, signature_rank)
+) COMMENT '菜品AI手册';
+
+-- ============================================
+-- 6. 订单表
 -- ============================================
 CREATE TABLE IF NOT EXISTS orders (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -98,6 +124,24 @@ CREATE TABLE IF NOT EXISTS orders (
     INDEX idx_create_time (create_time),
     UNIQUE KEY uk_orders_active_table (active_table_id)
 ) COMMENT '订单表';
+
+-- ============================================
+-- 7. AI 点餐确认幂等记录
+-- ============================================
+CREATE TABLE IF NOT EXISTS ai_order_submission (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    proposal_id VARCHAR(64) NOT NULL COMMENT 'Redis 推荐方案ID',
+    conversation_id VARCHAR(64) NOT NULL COMMENT 'AI 会话ID',
+    user_id BIGINT NOT NULL COMMENT '确认顾客ID',
+    table_id BIGINT NOT NULL COMMENT '确认桌台ID',
+    status ENUM('PROCESSING', 'SUCCEEDED') NOT NULL DEFAULT 'PROCESSING',
+    order_id BIGINT COMMENT '成功创建或加菜的订单ID',
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_ai_order_submission_proposal (proposal_id),
+    INDEX idx_ai_order_submission_user_time (user_id, create_time),
+    INDEX idx_ai_order_submission_order (order_id)
+) COMMENT 'AI 点餐确认幂等记录';
 
 -- ============================================
 -- 8. 订单明细表
@@ -169,6 +213,44 @@ INSERT INTO dish (name, category_id, price, description, status) VALUES
 ('雪碧', 4, 6.00, '330ml罐装', 1),
 ('已下架菜品', 1, 99.00, '用于测试下架场景', 0)
 ON DUPLICATE KEY UPDATE name=VALUES(name);
+
+-- 插入菜品AI手册资料（完整初始化会先重建该表；IGNORE 也避免单独重跑本段时覆盖商家资料）
+INSERT IGNORE INTO dish_ai_profile
+    (dish_id, cuisine, taste_tags, spicy_level, ingredients, allergens, dietary_tags,
+     is_signature, signature_rank, recommendation_notes, serving_people, profile_status)
+SELECT matched.id, seed.cuisine, seed.taste_tags, seed.spicy_level, seed.ingredients,
+       seed.allergens, seed.dietary_tags, seed.is_signature, seed.signature_rank,
+       seed.recommendation_notes, seed.serving_people, 'VERIFIED'
+FROM (
+    SELECT '鱼香肉丝' AS dish_name, '川菜' AS cuisine, '鱼香,酸甜,微辣' AS taste_tags,
+           2 AS spicy_level, '猪肉,木耳,胡萝卜,青椒' AS ingredients, 'NONE' AS allergens,
+           '含肉' AS dietary_tags, 1 AS is_signature, 1 AS signature_rank,
+           '经典下饭菜，酸甜微辣' AS recommendation_notes, 2 AS serving_people
+    UNION ALL SELECT '宫保鸡丁', '川菜', '香辣,咸鲜,微甜', 3,
+           '鸡肉,花生,辣椒,葱', '花生', '含肉,含坚果', 1, 2,
+           '招牌香辣菜，花生过敏者请勿点', 2
+    UNION ALL SELECT '糖醋里脊', '鲁菜', '酸甜,酥脆', 0,
+           '猪里脊,面粉,番茄酱', '麸质', '含肉', 1, 3,
+           '酸甜口味，不辣，适合多人分享', 2
+    UNION ALL SELECT '凉拌黄瓜', '家常菜', '清爽,蒜香', 1,
+           '黄瓜,蒜,醋', 'NONE', '素食', 0, NULL,
+           '清爽开胃的凉菜', 1
+    UNION ALL SELECT '番茄蛋汤', '家常菜', '鲜香,酸甜', 0,
+           '番茄,鸡蛋', '蛋类', '蛋奶素', 0, NULL,
+           '清淡家常汤品', 2
+    UNION ALL SELECT '可乐', '饮料', '甜,气泡', 0,
+           '碳酸水,糖', 'NONE', '素食', 0, NULL,
+           '330ml罐装含糖碳酸饮料', 1
+    UNION ALL SELECT '雪碧', '饮料', '柠檬味,甜,气泡', 0,
+           '碳酸水,糖,柠檬香料', 'NONE', '素食', 0, NULL,
+           '330ml罐装含糖碳酸饮料', 1
+) AS seed
+INNER JOIN (
+    SELECT name, MIN(id) AS id
+    FROM dish
+    WHERE name IN ('鱼香肉丝', '宫保鸡丁', '糖醋里脊', '凉拌黄瓜', '番茄蛋汤', '可乐', '雪碧')
+    GROUP BY name
+) AS matched ON matched.name = seed.dish_name;
 
 -- 插入测试桌台
 INSERT INTO table_info (name, capacity, status) VALUES

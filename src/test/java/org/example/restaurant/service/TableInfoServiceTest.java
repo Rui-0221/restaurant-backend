@@ -10,7 +10,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.IllegalTransactionStateException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.context.ActiveProfiles;
+
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -38,9 +43,11 @@ class TableInfoServiceTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
     private Long testTableId;
-    /** 测试桌台固定名称（清理时按名称匹配，可同时删除历史残留） */
-    private static final String TEST_TABLE_NAME = "测试桌T1";
+    private String testTableName;
 
     @BeforeEach
     void setUp() {
@@ -48,12 +55,11 @@ class TableInfoServiceTest {
         UserContext.setEmployeeId(1L);
         UserContext.setRole(1);
 
-        // 兜底清理：上次运行若被中断，同名测试桌台会残留，先删干净再创建
-        jdbcTemplate.update("DELETE FROM table_info WHERE name = ?", TEST_TABLE_NAME);
+        testTableName = "IT-桌台-" + UUID.randomUUID();
 
         // 插入测试桌台
         TableInfo table = new TableInfo();
-        table.setName(TEST_TABLE_NAME);
+        table.setName(testTableName);
         table.setCapacity(4);
         table.setStatus(0);  // 空闲
         tableInfoMapper.insert(table);
@@ -66,7 +72,9 @@ class TableInfoServiceTest {
     void tearDown() {
         UserContext.clear();
         // 清理测试桌台（真实提交，确保下次运行无残留）
-        tableInfoMapper.deleteById(testTableId);
+        if (testTableId != null) {
+            tableInfoMapper.deleteById(testTableId);
+        }
     }
 
     // ==================== 正常状态流转 ====================
@@ -137,6 +145,34 @@ class TableInfoServiceTest {
         // 验证状态未被修改
         TableInfo current = tableInfoService.getById(testTableId);
         assertEquals(0, current.getStatus(), "状态应未被修改");
+    }
+
+    @Test
+    void tryOccupyShouldRequireCallerTransaction() {
+        assertThrows(IllegalTransactionStateException.class,
+                () -> tableInfoService.tryOccupy(testTableId, 0));
+    }
+
+    @Test
+    void tryOccupyShouldReturnTrueAndJoinCallerTransaction() {
+        Boolean occupied = new TransactionTemplate(transactionManager)
+                .execute(status -> tableInfoService.tryOccupy(testTableId, 0));
+
+        assertTrue(occupied);
+        TableInfo updated = tableInfoService.getById(testTableId);
+        assertEquals(1, updated.getStatus());
+        assertEquals(1, updated.getVersion());
+    }
+
+    @Test
+    void tryOccupyShouldReturnFalseWhenCasConflicts() {
+        Boolean occupied = new TransactionTemplate(transactionManager)
+                .execute(status -> tableInfoService.tryOccupy(testTableId, 999));
+
+        assertFalse(occupied);
+        TableInfo current = tableInfoService.getById(testTableId);
+        assertEquals(0, current.getStatus());
+        assertEquals(0, current.getVersion());
     }
 
     @Test

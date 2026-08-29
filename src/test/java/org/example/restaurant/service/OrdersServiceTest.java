@@ -19,7 +19,9 @@ import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -40,8 +42,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * 6. 角色权限（后厨/服务员/管理员）
  * 7. 后端金额重算（防前端篡改）
  *
- * 注意：placeOrder 内部通过 REQUIRES_NEW 事务占用桌台，测试数据必须真实提交后才能被读到，
- * 因此不用 @Transactional 自动回滚，改为 @AfterEach 手动清理。
+ * 注意：集成测试数据必须真实提交后才能被读到，因此不用 @Transactional 自动回滚，
+ * 改为 @AfterEach 手动清理。
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -71,20 +73,19 @@ class OrdersServiceTest {
     private Long testTableId;
     private Long onSaleDishId;
     private Long offSaleDishId;
-    /** 测试桌台固定名称（清理时按名称匹配，可同时删除历史残留） */
-    private static final String TEST_TABLE_NAME = "测试桌T2";
+    private String testTableName;
+    private final List<Long> createdDishIds = new ArrayList<>();
 
     @BeforeEach
     void setUp() {
         UserContext.setEmployeeId(1L);
         UserContext.setRole(1);
-
-        // 兜底清理：上次运行若被中断，同名测试数据会残留，先删干净再创建
-        deleteTestData();
+        testTableName = "IT-订单桌-" + UUID.randomUUID();
+        createdDishIds.clear();
 
         // 测试桌台
         TableInfo table = new TableInfo();
-        table.setName(TEST_TABLE_NAME);
+        table.setName(testTableName);
         table.setCapacity(4);
         table.setStatus(0);
         tableInfoMapper.insert(table);
@@ -100,6 +101,7 @@ class OrdersServiceTest {
         dish1.setUpdateTime(LocalDateTime.now());
         dishMapper.insert(dish1);
         onSaleDishId = dish1.getId();
+        createdDishIds.add(onSaleDishId);
 
         // 已下架菜品
         Dish dish2 = new Dish();
@@ -111,6 +113,7 @@ class OrdersServiceTest {
         dish2.setUpdateTime(LocalDateTime.now());
         dishMapper.insert(dish2);
         offSaleDishId = dish2.getId();
+        createdDishIds.add(offSaleDishId);
     }
 
     @AfterEach
@@ -121,15 +124,21 @@ class OrdersServiceTest {
 
     /**
      * 清理测试数据（真实提交，确保下次运行无残留）。
-     * 按固定命名删除，因此也能清掉"上次运行被中断"残留的同名数据（兜底）。
      * 删除顺序：状态日志 → 订单明细 → 订单 → 菜品 → 桌台
      */
     private void deleteTestData() {
-        jdbcTemplate.update("DELETE FROM order_status_log WHERE order_id IN (SELECT id FROM orders WHERE table_id IN (SELECT id FROM table_info WHERE name = ?))", TEST_TABLE_NAME);
-        jdbcTemplate.update("DELETE FROM order_detail WHERE order_id IN (SELECT id FROM orders WHERE table_id IN (SELECT id FROM table_info WHERE name = ?))", TEST_TABLE_NAME);
-        jdbcTemplate.update("DELETE FROM orders WHERE table_id IN (SELECT id FROM table_info WHERE name = ?)", TEST_TABLE_NAME);
-        jdbcTemplate.update("DELETE FROM dish WHERE name LIKE '测试菜品%' OR name LIKE '加菜%' OR name = '新菜品' OR name LIKE '李四%' OR name LIKE '王五%'");
-        jdbcTemplate.update("DELETE FROM table_info WHERE name = ?", TEST_TABLE_NAME);
+        if (testTableId != null) {
+            jdbcTemplate.update("DELETE FROM order_status_log WHERE order_id IN (SELECT id FROM orders WHERE table_id = ?)", testTableId);
+            jdbcTemplate.update("DELETE FROM order_detail WHERE order_id IN (SELECT id FROM orders WHERE table_id = ?)", testTableId);
+            jdbcTemplate.update("DELETE FROM orders WHERE table_id = ?", testTableId);
+        }
+        for (Long dishId : createdDishIds) {
+            jdbcTemplate.update("DELETE FROM dish_ai_profile WHERE dish_id = ?", dishId);
+            jdbcTemplate.update("DELETE FROM dish WHERE id = ?", dishId);
+        }
+        if (testTableId != null) {
+            jdbcTemplate.update("DELETE FROM table_info WHERE id = ?", testTableId);
+        }
     }
 
     // ==================== 首次点餐 ====================
@@ -282,6 +291,68 @@ class OrdersServiceTest {
         assertEquals(new BigDecimal("59.80"), active.getTotalAmount());
         assertEquals(2, active.getDetails().size());
         assertEquals(1, tableInfoService.getById(testTableId).getStatus());
+    }
+
+    @RepeatedTest(100)
+    void concurrentFirstOrdersOnIdleTableShouldShareOneActiveOrder() throws Exception {
+        Dish secondDish = createDish("测试菜品-并发二", new BigDecimal("17.50"));
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            java.util.concurrent.Callable<OrderVO> firstRequest = () -> {
+                UserContext.setUserId(100L);
+                ready.countDown();
+                try {
+                    assertTrue(start.await(5, TimeUnit.SECONDS), "第一个下单线程未收到起跑信号");
+                    return ordersService.placeOrder(
+                            buildDTO(testTableId, List.of(item(onSaleDishId, 2))));
+                } finally {
+                    UserContext.clear();
+                }
+            };
+            java.util.concurrent.Callable<OrderVO> secondRequest = () -> {
+                UserContext.setUserId(101L);
+                ready.countDown();
+                try {
+                    assertTrue(start.await(5, TimeUnit.SECONDS), "第二个下单线程未收到起跑信号");
+                    return ordersService.placeOrder(
+                            buildDTO(testTableId, List.of(item(secondDish.getId(), 1))));
+                } finally {
+                    UserContext.clear();
+                }
+            };
+
+            Future<OrderVO> first = executor.submit(firstRequest);
+            Future<OrderVO> second = executor.submit(secondRequest);
+            assertTrue(ready.await(5, TimeUnit.SECONDS), "两个下单线程应准备就绪");
+            assertEquals(0, tableInfoService.getById(testTableId).getStatus(), "并发起跑前桌台必须空闲");
+            start.countDown();
+
+            OrderVO firstResult = assertDoesNotThrow(
+                    () -> first.get(10, TimeUnit.SECONDS), "第一个并发首次下单请求失败");
+            OrderVO secondResult = assertDoesNotThrow(
+                    () -> second.get(10, TimeUnit.SECONDS), "第二个并发首次下单请求失败");
+            assertNotNull(firstResult);
+            assertNotNull(secondResult);
+            assertEquals(firstResult.getId(), secondResult.getId(), "并发首次下单应归并到同一活跃订单");
+        } finally {
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "下单线程池应正常结束");
+        }
+
+        List<Orders> activeOrders = ordersMapper.findActiveByTableId(testTableId);
+        assertEquals(1, activeOrders.size(), "同一桌只能有一个活跃订单");
+        OrderVO active = ordersService.getActiveOrderByTable(testTableId);
+        assertEquals(new BigDecimal("77.30"), active.getTotalAmount(), "两个请求的金额都必须进入同一订单");
+        assertTrue(active.getDetails().stream()
+                .anyMatch(detail -> onSaleDishId.equals(detail.getDishId()) && detail.getAmount() == 2),
+                "第一个请求的菜品贡献必须保留");
+        assertTrue(active.getDetails().stream()
+                .anyMatch(detail -> secondDish.getId().equals(detail.getDishId()) && detail.getAmount() == 1),
+                "第二个请求的菜品贡献必须保留");
+        assertEquals(1, tableInfoService.getById(testTableId).getStatus(), "并发下单后桌台应处于占用状态");
     }
 
     // ==================== 结账释放桌台 + 再次点餐 ====================
@@ -616,6 +687,7 @@ class OrdersServiceTest {
         dish.setCreateTime(LocalDateTime.now());
         dish.setUpdateTime(LocalDateTime.now());
         dishMapper.insert(dish);
+        createdDishIds.add(dish.getId());
         return dish;
     }
 }

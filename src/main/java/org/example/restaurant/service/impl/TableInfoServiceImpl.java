@@ -83,6 +83,23 @@ public class TableInfoServiceImpl implements TableInfoService {
     }
 
     /**
+     * 在调用方事务中执行空闲桌台占用 CAS。
+     * 预期的并发冲突只返回 false，不能抛异常污染 placeOrder 外层事务。
+     */
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean tryOccupy(Long id, Integer expectedVersion) {
+        int rows = tableInfoMapper.updateStatusCas(id, 1, 0, expectedVersion);
+        if (rows == 1) {
+            return true;
+        }
+        if (rows == 0) {
+            return false;
+        }
+        throw new IllegalStateException("桌台占用 CAS 返回异常影响行数: " + rows);
+    }
+
+    /**
      * 状态流转规则校验
      */
     private boolean canTransition(Integer from, Integer to) {

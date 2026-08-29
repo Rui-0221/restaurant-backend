@@ -17,4 +17,13 @@ public interface TableInfoService {
      * @param newStatus 目标状态
      */
     void updateStatus(Long id, Integer newStatus);
+
+    /**
+     * 在调用方现有事务中尝试将空闲桌台占用。
+     *
+     * @param id 桌台ID
+     * @param expectedVersion 调用方读取到的桌台版本号
+     * @return CAS 成功返回 true；并发冲突返回 false
+     */
+    boolean tryOccupy(Long id, Integer expectedVersion);
 }

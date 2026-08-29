@@ -48,7 +48,7 @@ public interface OrdersMapper {
 
     /**
      * 占桌台 CAS 冲突后重查活跃订单：FOR UPDATE 锁读绕过 REPEATABLE READ 快照，
-     * 必然能看到已提交的并发订单（CAS 失败时对方事务必已结束），用于自动转加菜
+     * 用于看到已提交的并发订单并自动转加菜。
      */
     @Select("SELECT * FROM orders WHERE table_id=#{tableId} AND status IN (1,2,3,4) FOR UPDATE")
     List<Orders> findActiveByTableIdForUpdate(Long tableId);

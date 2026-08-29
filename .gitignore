@@ -3,6 +3,9 @@ application-local.yml
 application-*.local.yml
 *.local.yml
 
+# 部署目录：restaurant.service 含真实密码，禁止提交（nginx 配置无密码可提交）
+deploy/restaurant.service
+
 # 环境变量文件
 .env
 .env.*
@@ -27,6 +30,7 @@ target/
 logs/
 
 # 临时文件
+.codex-tmp/
 *.tmp
 *.bak
 *.swp

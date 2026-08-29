@@ -12,6 +12,8 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.util.UUID;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -23,7 +25,8 @@ import static org.junit.jupiter.api.Assertions.*;
  *
  * 依赖 init.sql 中 user 表的 uk_phone 唯一索引；已建库需先手动执行
  * `ALTER TABLE user ADD UNIQUE KEY uk_phone (phone)`（README 快速开始有说明）。
- * 测试用固定手机号，@BeforeEach/@AfterEach 按号码清理，中断运行可自愈。
+ * 每次测试使用随机手机号；只有插入成功并核对身份后才记录具体 user ID，
+ * @AfterEach 只按该 ID 清理。即使随机手机号意外撞到真实用户，也不会删除真实数据。
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -38,24 +41,38 @@ class UserServiceTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
-    /** 测试用户固定手机号（199 号段保留段，清理时按号码匹配，可同时删除历史残留） */
-    private static final String TEST_PHONE = "19900000001";
-    private static final String TEST_NAME = "测试用户T1";
+    private String testPhone;
+    private String testName;
+    private Long createdUserId;
 
     @BeforeEach
     void setUp() {
-        // 兜底清理：上次运行若被中断，同手机号测试用户会残留，先删干净
-        jdbcTemplate.update("DELETE FROM `user` WHERE phone = ?", TEST_PHONE);
+        String digits = Long.toUnsignedString(
+                UUID.randomUUID().getLeastSignificantBits()).replace("-", "");
+        testPhone = "199" + String.format("%8s", digits.substring(0, Math.min(8, digits.length())))
+                .replace(' ', '0');
+        testName = "IT-用户-" + UUID.randomUUID();
+        createdUserId = null;
     }
 
     @AfterEach
     void tearDown() {
-        jdbcTemplate.update("DELETE FROM `user` WHERE phone = ?", TEST_PHONE);
+        if (createdUserId == null) {
+            return;
+        }
+
+        User created = userMapper.findById(createdUserId);
+        assertNotNull(created, "本次测试成功创建的用户在清理前应仍存在");
+        assertEquals(testPhone, created.getPhone(), "拒绝清理 ID 已不再属于本次测试手机号的用户");
+        assertEquals(testName, created.getName(), "拒绝清理 ID 已不再属于本次测试名称的用户");
+        jdbcTemplate.update("DELETE FROM `user` WHERE id = ?", createdUserId);
+        assertNull(userMapper.findById(createdUserId), "本次测试创建的用户应按具体 ID 清理干净");
     }
 
     @Test
     void shouldRejectDuplicatePhoneWithFriendlyMessage() {
         userService.register(newUser()); // 第一次注册成功
+        rememberCreatedUser();
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> userService.register(newUser()),
@@ -67,17 +84,26 @@ class UserServiceTest {
     void shouldRejectDuplicatePhoneAtDbLevel() {
         // 绕过 Service 查重直接插入，模拟两个并发请求同时通过预检的间隙
         userMapper.insert(newUser());
+        rememberCreatedUser();
 
         assertThrows(DuplicateKeyException.class,
                 () -> userMapper.insert(newUser()),
                 "数据库唯一索引 uk_phone 应兜底拦截重复手机号");
     }
 
+    private void rememberCreatedUser() {
+        User created = userMapper.findByPhone(testPhone);
+        assertNotNull(created, "成功插入后应能按唯一手机号查到测试用户");
+        assertEquals(testName, created.getName(), "只允许记录本次测试实际创建的用户");
+        createdUserId = created.getId();
+        assertNotNull(createdUserId, "成功创建的测试用户必须有具体 ID");
+    }
+
     private User newUser() {
         User user = new User();
-        user.setName(TEST_NAME);
+        user.setName(testName);
         user.setPassword("123456");
-        user.setPhone(TEST_PHONE);
+        user.setPhone(testPhone);
         return user;
     }
 }

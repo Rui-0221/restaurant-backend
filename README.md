@@ -12,7 +12,8 @@
 
 ```
 顾客入座 → 扫桌上二维码 → 浏览在售菜品（Redis缓存）
-         → 提交订单（后端强制重算金额）
+         → 手动选菜，或用自然语言让 AI 按口味/菜系/忌口推荐
+         → 预览推荐方案 → 顾客显式确认 → 提交订单（后端强制重算金额）
          → 桌台自动占用（乐观锁防并发）
          → 后厨实时收到通知（WebSocket推送）
          → 后厨开始制作(1→2) → 服务员上菜(2→3)、转入用餐中(3→4)
@@ -36,6 +37,7 @@
 | ORM | MyBatis | 3.0.3 | 全注解方式，零 XML 配置，SQL 可控 |
 | 数据库 | MySQL | 8.0+ | 事务支持（ACID），行锁支持 SELECT FOR UPDATE |
 | 缓存 | Redis | 7.0+ | 高性能，支持 TTL 过期，用于菜品缓存 |
+| 大模型 | DeepSeek Chat Completions | `deepseek-v4-flash` | OpenAI 兼容接口，JSON 输出；本地白名单二次校验 |
 | 实时通信 | WebSocket | Spring 内置 | 低延迟推送，频道隔离设计 |
 | JWT | JJWT | 0.12.6 | 自包含 Token，含角色声明 |
 | API 文档 | Knife4j | 4.5.0 | Swagger 增强版，中文界面 |
@@ -160,6 +162,14 @@ jwt:
 
 生产部署时建议改用环境变量 `JWT_SECRET`（优先级高于配置文件）。
 
+如需启用 AI 口味推荐，再配置以下环境变量。未配置 Key 时应用仍可启动，点名菜品和无偏好招牌推荐仍走本地规则；需要大模型的请求会安全返回手动点餐，不会偷偷降级为招牌菜：
+
+```powershell
+$env:DEEPSEEK_ENABLED="true"
+$env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
+# 可选：DEEPSEEK_MODEL、DEEPSEEK_BASE_URL、DEEPSEEK_CONNECT_TIMEOUT、DEEPSEEK_READ_TIMEOUT
+```
+
 ### 第四步：启动
 
 项目自带 Maven Wrapper（无需本机安装 Maven，首次运行自动下载）：
@@ -185,7 +195,44 @@ cd restaurant-backend
 - **Base URL**: `http://localhost:8080`
 - **认证方式**: `Authorization: Bearer <JWT Token>`
 - **统一成功响应**: `{"code": 1, "msg": "success", "data": {...}}`
-- **统一失败响应**: `{"code": 0, "msg": "错误描述", "data": null}`
+- **统一失败响应**: `{"code": 0, "msg": "错误描述", "data": null}`；AI 对话失败时 `data` 会保留 `MANUAL_ORDER`、错误码和空菜品列表，便于前端安全切换到手动点餐
+
+---
+
+### 🤖 AI 点餐（顾客端）
+
+| 方法 | 路径 | 说明 | 权限 |
+|------|------|------|:--:|
+| POST | `/users/ai-order/chat` | 自然语言点名、口味/菜系/忌口推荐或招牌推荐；只生成预览 | 顾客 JWT |
+| POST | `/users/ai-order/confirm` | 显式确认一次性方案；重复请求幂等返回原订单 | 顾客 JWT |
+| GET | `/admin/dish-ai-profiles` | 查询菜品 AI 手册 | 管理员 role=1 |
+| GET | `/admin/dish-ai-profiles/{dishId}` | 查询单个菜品 AI 手册 | 管理员 role=1 |
+| PUT | `/admin/dish-ai-profiles/{dishId}` | 新增或更新菜系、口味、配料、过敏原、招牌排序 | 管理员 role=1 |
+
+对话请求示例：
+
+```json
+{
+  "tableId": 3,
+  "conversationId": null,
+  "message": "我们3个人，不吃花生，想吃清淡一点的川菜"
+}
+```
+
+返回 `PROPOSAL` 时只是一份待确认方案，必须把同一 `tableId`、`conversationId` 和 `proposalId` 发到确认接口才会调用现有 `placeOrder`。服务端始终从 JWT 读取 `userId`，请求体中的伪造身份不会生效。
+
+安全与生命周期规则：
+
+- 会话 Redis TTL 30 分钟，最多保留最近 20 轮；方案 TTL 10 分钟。
+- 同一用户每分钟最多 10 次 AI 对话；第 11 次会报限流，并先作废旧方案。
+- 任意新的有效消息都会立即作废旧方案，避免顾客补充过敏信息后仍确认过时菜品。
+- 点名菜品和无偏好表达（如“推荐一下”“帮我推荐几道菜”“不知道吃什么”）由本地规则处理；后者按 `signature_rank` 推荐已核验、在售的招牌菜。多轮会话中只要已有口味、菜系、人数或忌口信息，就继续交给模型应用完整上下文，不走招牌捷径。
+- DeepSeek 只能返回数据库白名单中的菜品 ID；数量、菜系、过敏原、价格和上下架状态由后端再次校验，价格以确认时数据库为准。
+- “不能吃花生”“对花生敏感”“避开花生”“不要放花生”等常见安全措辞也由后端确定性复核；过敏资料为 `UNKNOWN` 时拒绝生成方案。
+- 模型超时、429、截断/空/类型非法 JSON、未知菜品、过敏冲突或 Redis 故障一律返回 `MANUAL_ORDER` + 空列表，不回退招牌菜、不创建方案、不下单。
+- 确认使用 Redis 原子领取和 `ai_order_submission.proposal_id` 唯一键双重幂等；确认接口只负责加菜/下单，不提供删除、取消或状态修改。
+
+无偏好招牌数据由 `dish_ai_profile` 维护。`VERIFIED` 资料必须显式填写过敏原；无已知过敏原使用 `NONE`，空值不代表安全。
 
 ---
 
@@ -636,10 +683,18 @@ mvn test
 ### 测试策略
 
 - **框架**: JUnit 5 + `@SpringBootTest`
-- **环境隔离**: 所有 Spring 集成测试强制使用 `test` Profile，默认连接本机 `restaurant_management_test`，不读取部署环境数据库
+- **环境选择**: 纯单元测试不连接外部服务；需要验证现有 schema 的集成/全链路测试按任务约定连接本地 MySQL/Redis，并用 UUID 与捕获 ID 隔离数据
 - **事务**: 测试**不使用** `@Transactional` 自动回滚（`updateStatus` 用 REQUIRES_NEW，测试数据必须真实提交才能被读到），改为 `@BeforeEach`/`@AfterEach` 手动清理
-- **清理策略**: 测试数据有固定命名（桌台/菜品），`@BeforeEach` 先按命名清掉历史残留再创建新数据——即使上次运行被中断，下次运行也会自动自愈，不污染数据库
+- **清理策略**: 共享本地库测试使用 UUID 标识并捕获生成 ID；`@AfterEach` 只按精确 ID/唯一前缀删除。Redis 使用每次运行唯一命名空间和 `SCAN` 精确清理，禁止 `FLUSHDB`、`KEYS *` 和宽泛 `LIKE` 删除
+- **风险选测**: 确定性测试在代码/配置/数据未变化时不机械重跑；事务、鉴权、迁移和过敏安全按 R4 门禁执行。只有并发竞态测试采用多轮重复运行
 - **每个测试方法独立运行**，不依赖执行顺序
+
+AI 相关门禁还包括：HTTP→JWT→菜品手册→Redis→确认→现有下单服务的全链路测试、20 轮同方案并发确认幂等测试、迁移双跑不覆盖资料，以及 DeepSeek 严格 JSON 契约测试。真实 DeepSeek 冒烟默认跳过，配置 Key 后显式运行（会访问公网并产生少量 token 费用）：
+
+```powershell
+$env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
+./mvnw.cmd -Dtest=DeepSeekLiveDishSelectionTest test
+```
 
 ### 测试覆盖清单
 
@@ -819,7 +874,9 @@ CREATE TABLE order_detail (
 已有数据库不会因为更新 `init.sql` 自动获得新约束。发布新版应用前后需按文件内说明依次执行：
 
 1. `db/migration/20260814_01_order_detail_amount_check.sql`：先检查异常数量，再增加数量 `CHECK`；
-2. `db/migration/20260814_02_one_active_order_per_table.sql`：先检查重复活跃订单和桌台状态，再增加生成列唯一索引。
+2. `db/migration/20260814_02_one_active_order_per_table.sql`：先检查重复活跃订单和桌台状态，再增加生成列唯一索引；
+3. `db/migration/20260827_01_ai_ordering_profile.sql`：非破坏性创建 `dish_ai_profile`，并仅补齐缺失的招牌/过敏原手册；重复执行不会覆盖管理员后来维护的资料；
+4. `db/migration/20260827_02_ai_order_submission.sql`：创建 AI 确认幂等表及 `proposal_id` 唯一索引。
 
 只读检查返回异常记录时必须人工核对，不能直接执行DDL或自动删除订单。
 
