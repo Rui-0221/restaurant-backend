@@ -1,903 +1,361 @@
-# 🍽️ 在线餐饮管理平台 — 后端服务
+# 在线餐饮管理平台 · 后端
 
-> Spring Boot 3.2 + MyBatis | 扫码点餐 · 后厨协作 · 实时通知 · 收银结账
+面向餐厅堂食场景的个人全栈项目。本仓库提供 Java 后端，配套 Vue 顾客端与员工后台，覆盖扫码点餐、同桌加菜、后厨通知、订单流转和结账，并提供需要顾客确认的 AI 点餐推荐。
 
----
+- **后端**：Java 17、Spring Boot、MyBatis、MySQL、Redis。
+- **前端**：[restaurant-frontend](https://github.com/Rui-0221/restaurant-frontend)，包含 Vue 3 + Vant 顾客端、Vue 3 + Element Plus 员工端。
+- **AI 接入**：通过 Spring RestClient 调用 DeepSeek，结合本地推荐规则与服务端校验。
 
-## 📋 项目概述
+本项目用于学习和功能演示。下文说明当前实现、运行方式与已知限制；测试代码的存在不代表所有环境下已经验证通过。
 
-这是一套面向线下餐厅的**扫码点餐后端系统**，覆盖从顾客入座到结账离店的全链路业务。
+## 功能与业务流程
 
-### 业务流程
+| 使用者 | 主要功能 |
+| --- | --- |
+| 顾客 | 注册登录、浏览在售菜品、扫码下单、同桌加菜、查看个人历史订单、AI 推荐与确认 |
+| 服务员 | 代顾客点餐、处理上菜与用餐状态、结账 |
+| 后厨 | 接收订单通知、开始制作 |
+| 管理员 | 员工、分类、菜品、桌台管理，查看营业额，维护菜品 AI 资料 |
 
-```
-顾客入座 → 扫桌上二维码 → 浏览在售菜品（Redis缓存）
-         → 手动选菜，或用自然语言让 AI 按口味/菜系/忌口推荐
-         → 预览推荐方案 → 顾客显式确认 → 提交订单（后端强制重算金额）
-         → 桌台自动占用（乐观锁防并发）
-         → 后厨实时收到通知（WebSocket推送）
-         → 后厨开始制作(1→2) → 服务员上菜(2→3)、转入用餐中(3→4)
-         → 中途加菜（再扫码自动追加）
-         → 服务员结账(4→5) → 桌台自动释放
-```
-
-### 项目定位
-
-- **场景**：线下餐厅扫码点餐、后厨协作、收银结账
-- **类型**：简历核心后端项目，面试可深度讲解 15 分钟
-- **规模**：56 个 Java 源文件，6 个 Controller，52 个测试方法（关键并发场景各重复20轮）
-
----
-
-## 🛠️ 技术栈
-
-| 分类 | 技术 | 版本 | 选型理由 |
-|------|------|:--:|------|
-| 框架 | Spring Boot | 3.2.5 | 生态成熟，自动配置减少样板代码 |
-| ORM | MyBatis | 3.0.3 | 全注解方式，零 XML 配置，SQL 可控 |
-| 数据库 | MySQL | 8.0+ | 事务支持（ACID），行锁支持 SELECT FOR UPDATE |
-| 缓存 | Redis | 7.0+ | 高性能，支持 TTL 过期，用于菜品缓存 |
-| 大模型 | DeepSeek Chat Completions | `deepseek-v4-flash` | OpenAI 兼容接口，JSON 输出；本地白名单二次校验 |
-| 实时通信 | WebSocket | Spring 内置 | 低延迟推送，频道隔离设计 |
-| JWT | JJWT | 0.12.6 | 自包含 Token，含角色声明 |
-| API 文档 | Knife4j | 4.5.0 | Swagger 增强版，中文界面 |
-| 校验 | Hibernate Validator | 8.0+ | JSR-380 标准，注解式参数校验 |
-| 加密 | Spring Security Crypto | 6.2+ | BCrypt 密码哈希 |
-
----
-
-## 🏗️ 系统架构
-
-### 分层架构
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                     Controller 层                       │
-│  Employee · User · TableInfo · Dish · Orders            │
-│  REST API (6个Controller) + WebSocket 端点              │
-├─────────────────────────────────────────────────────────┤
-│                     Interceptor 层                      │
-│  JwtInterceptor (员工认证+角色解析 → /employees, /orders) │
-│  UserJwtInterceptor (用户认证 → /users, /orders/scan-order)      │
-│  → ThreadLocal (UserContext)                             │
-├─────────────────────────────────────────────────────────┤
-│                     Service 层                          │
-│  核心业务: placeOrder(首次/加菜), updateOrderStatus     │
-│           listOnSale(缓存)                              │
-├─────────────────────────────────────────────────────────┤
-│                     Mapper 层                           │
-│  MyBatis 全注解: @Select @Insert @Update @Delete       │
-│  复杂SQL: CAS乐观锁, 行锁, 批量插入, 聚合查询          │
-├─────────────────────────────────────────────────────────┤
-│                   基础设施层                             │
-│  MySQL · Redis · WebSocket · JWT · BCrypt               │
-└─────────────────────────────────────────────────────────┘
+```text
+顾客扫码入座 → 浏览菜单 → 手动选菜 / AI 推荐后确认
+                              ↓
+                       创建订单 / 同桌加菜
+                              ↓
+                      事务提交后通知后厨
+                              ↓
+             待制作 → 制作中 → 已上菜 → 用餐中 → 已结账
+                                                      ↓
+                                                 释放桌台
 ```
 
-### 项目目录结构
+订单状态编码为：0 已取消、1 待制作、2 制作中、3 已上菜、4 用餐中、5 已结账。状态 1～4 属于活跃订单；同一桌台的后续下单会合并到现有活跃订单。
 
-```
+## 技术与结构
+
+| 技术 | 本项目中的用途 |
+| --- | --- |
+| Java 17 / Spring Boot 3.2.5 | Web 接口、依赖注入、配置与事务 |
+| MyBatis Spring Boot Starter 3.0.3 | Mapper 接口与注解 SQL；这里的版本是 Starter 版本 |
+| MySQL 8.0.16+ | 业务数据、事务、行锁、唯一索引与 CHECK 约束 |
+| Redis | 在售菜单缓存、AI 会话、待确认方案与请求限流 |
+| Spring WebSocket | 向后厨连接推送新订单、加菜等通知 |
+| JJWT / Spring Security Crypto | JWT 签发与校验、BCrypt 密码哈希 |
+| Jakarta Validation / Knife4j | 请求参数校验、交互式 API 文档 |
+| RestClient / Jackson | DeepSeek HTTP 调用与结构化响应解析 |
+| JUnit 5 / Mockito / Spring Test | 单元测试、模拟 HTTP 测试、数据库与并发集成测试 |
+
+依赖版本以 [pom.xml](pom.xml) 为准。当前认证使用自定义 MVC 拦截器；引入的 Spring Security Crypto 用于密码处理。
+
+项目采用单体应用与技术分层，AI 协议、模型适配器和会话实现放在独立的 `ai` 包中：
+
+```text
 src/main/java/org/example/restaurant/
-├── controller/              # REST API (6个)
-│   ├── EmployeeController       # 员工管理 + 登录（写操作限管理员）
-│   ├── UserController           # 顾客注册/登录/查个人信息
-│   ├── TableInfoController      # 桌台CRUD + 乐观锁状态变更
-│   ├── DishController           # 菜品CRUD + Redis缓存在售列表
-│   ├── CategoryController       # 分类CRUD
-│   └── OrdersController         # 订单CRUD + 扫码点餐 + 状态流转 + 营业额统计
-├── service/                 # 接口 (6个)
-├── service/impl/            # 实现 (6个)
-│   ├── OrdersServiceImpl        # ⭐核心：placeOrder + addItemsToOrder + updateOrderStatus
-│   ├── TableInfoServiceImpl     # ⭐乐观锁CAS + 状态流转校验
-│   ├── DishServiceImpl          # ⭐Redis Cache-Aside + 穿透防护
-│   └── ...
-├── mapper/                  # MyBatis 注解式数据访问 (8个)
-├── entity/                  # 数据库实体 (8个)
-├── dto/                     # 请求/响应对象 (7个)
-├── interceptor/             # JWT拦截器 (2个)
-├── config/                  # 配置类 (4个)
-│   ├── WebConfig                # 拦截器注册 + 路径白名单
-│   ├── RedisConfig              # StringRedisTemplate 序列化
-│   ├── WebSocketConfig          # /ws/kitchen 端点注册
-│   └── SwaggerConfig            # Knife4j 文档配置
-├── common/                  # 公共组件 (7个)
-│   ├── JwtUtil                  # Token 生成/解析（含角色+类型）
-│   ├── UserContext              # ThreadLocal 用户上下文
-│   ├── Result                   # 统一响应格式
-│   ├── ResponseUtil             # 拦截器401 JSON 响应工具
-│   ├── BusinessException        # 业务异常
-│   ├── PasswordEncoderUtil      # BCrypt 密码加密
-│   └── GlobalExceptionHandler   # 全局异常处理
-├── websocket/               # WebSocket 处理器
-│   └── KitchenWebSocketHandler  # 频道隔离 + 新订单/加菜通知
-└── RestaurantApplication    # 启动类
+├── controller/     HTTP 入口、请求校验、响应组装
+├── service/        业务接口
+│   └── impl/       订单、菜品、用户、AI 点餐等业务实现
+├── mapper/         MyBatis 接口与 SQL
+├── entity/         数据库实体及查询结果对象
+├── dto/            请求与响应对象
+├── ai/             AI 协议、候选菜品选择、DeepSeek 适配器
+│   └── state/      Redis 会话、方案与并发轮次管理
+├── interceptor/    员工与顾客 JWT 校验
+├── websocket/      后厨通知处理
+├── common/         Result、异常处理、JWT、请求用户上下文
+└── config/         Web、Redis、WebSocket、AI 等配置
+
+src/main/resources/db/
+├── init.sql        重建演示数据库
+└── migration/      手工执行的增量迁移
+
+src/test/           单元测试与集成测试
 ```
 
----
+典型调用链：
 
-## 🚀 快速开始
+```text
+HTTP → JWT 拦截器 → Controller → Service → Mapper → MySQL
+                                  │
+                                  ├── Redis
+                                  └── AI 推荐 → DeepSeek（需要时）
+```
 
-### 环境要求
+## 本地运行
 
-| 组件 | 版本 | 用途 |
-|------|:--:|------|
-| JDK | 17+ | 编译运行 |
-| MySQL | 8.0+ | 数据存储 |
-| Redis | 7.0+ | 菜品缓存 |
-| Maven | 3.6+ | 构建 |
+### 1. 准备环境
 
-### 第一步：创建数据库
+- JDK 17。
+- MySQL 8.0.16 或更高版本，以执行项目中的 CHECK 约束。
+- Redis 服务。
+- Maven 可使用仓库自带的 Wrapper；首次使用需要下载 Maven 与依赖。
+
+以下命令在本仓库根目录运行，Windows 示例使用 PowerShell。
+
+### 2. 初始化演示数据
+
+**[init.sql](src/main/resources/db/init.sql) 会先删除已有业务表，再重新建表并写入演示数据。它不是升级脚本，只能对可丢弃的本地演示数据库执行。脚本中的目标库固定为 `restaurant_management`。**
+
+确认该实例中没有需要保留的同名库数据后，进入 MySQL 客户端：
+
+```powershell
+mysql -u root -p
+```
+
+在 MySQL 客户端执行，路径替换为实际仓库路径：
 
 ```sql
-CREATE DATABASE restaurant_management CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+SOURCE C:/your/path/restaurant-backend/src/main/resources/db/init.sql;
 ```
 
-### 第二步：执行初始化脚本
+已有数据的数据库应先检查当前表结构，再选择尚未应用的 [增量迁移](src/main/resources/db/migration)。订单数量约束和活跃订单唯一索引的迁移包含检查 SQL，需先处理检查结果。完整初始化已包含这些结构，不要重复执行对应的 ALTER TABLE。
 
-运行 `src/main/resources/db/init.sql`，自动完成：
-- 员工表添加 `role` 字段
-- 订单表添加 `table_id`、移除配送字段
-- 创建 `table_info`（桌台信息，含 version 乐观锁字段）
-- 创建 `order_status_log`（订单状态审计日志，营业额统计依据）
-- 插入 6 张测试桌台（A1~C1）
-- `user` 表新增 `uk_phone` 唯一索引（手机号查重 DB 兜底）；**已建库需手动执行** `ALTER TABLE user ADD UNIQUE KEY uk_phone (phone)`（执行前先确认无重复手机号）
+项目没有接入自动数据库迁移工具，启动应用不会自动完成这些迁移。
 
-### 第三步：配置数据库密码与 JWT 密钥
+### 3. 填写本地配置
 
-创建 `src/main/resources/application-local.yml`：
+创建 `src/main/resources/application-local.yml`，按实际环境填写：
 
 ```yaml
 spring:
   datasource:
-    password: 你的MySQL密码
+    url: jdbc:mysql://localhost:3306/restaurant_management?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8
+    username: root
+    password: "填写本机 MySQL 密码"
   data:
     redis:
-      password: 你的Redis密码  # Redis无密码则删除此行
+      host: localhost
+      port: 6379
+      password: ""
 
-# JWT 签名密钥（至少32字符，可用 `openssl rand -hex 32` 生成；
-# 启动时会强校验，缺失/过短/使用默认值都会拒绝启动，防止生产环境误用公开密钥）
 jwt:
-  secret: 你的随机密钥
+  secret: "替换为自己生成的随机密钥"
+
+restaurant:
+  ai:
+    enabled: false
 ```
 
-生产部署时建议改用环境变量 `JWT_SECRET`（优先级高于配置文件）。
+`application-local.yml` 已被 Git 忽略。JWT 密钥按 UTF-8 编码至少需要 32 字节，不可使用公共默认值；缺失或不合格时启动会失败，校验代码见 [JwtUtil](src/main/java/org/example/restaurant/common/JwtUtil.java)。
 
-如需启用 AI 口味推荐，再配置以下环境变量。未配置 Key 时应用仍可启动，点名菜品和无偏好招牌推荐仍走本地规则；需要大模型的请求会安全返回手动点餐，不会偷偷降级为招牌菜：
+也可以使用 [application.yml](src/main/resources/application.yml) 中的环境变量，例如 `DB_URL`、`DB_USERNAME`、`DB_PASSWORD`、`REDIS_HOST`、`REDIS_PORT`、`REDIS_PASSWORD`、`JWT_SECRET`。已在本地配置中写死的属性，应同步修改，避免配置来源不一致。
+
+### 4. 启动后端与前端
 
 ```powershell
-$env:DEEPSEEK_ENABLED="true"
-$env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
-# 可选：DEEPSEEK_MODEL、DEEPSEEK_BASE_URL、DEEPSEEK_CONNECT_TIMEOUT、DEEPSEEK_READ_TIMEOUT
+.\mvnw.cmd spring-boot:run
 ```
 
-### 第四步：启动
+Linux / macOS 使用 `./mvnw spring-boot:run`。应用默认启用 `local` Profile，后端默认端口为 8080。
 
-项目自带 Maven Wrapper（无需本机安装 Maven，首次运行自动下载）：
+- Knife4j：<http://localhost:8080/doc.html>
+- OpenAPI JSON：<http://localhost:8080/v3/api-docs>
+- 公开菜单接口：<http://localhost:8080/dishes/on-sale>
 
-```powershell
-cd restaurant-backend
-.\mvnw.cmd spring-boot:run   # Linux/macOS 用 ./mvnw
-```
+配套前端的安装与启动见 [前端 README](https://github.com/Rui-0221/restaurant-frontend#readme)。顾客端默认端口 5173，员工端 5174；开发代理将 `/api` 转发到后端并去掉该前缀。因此直连后端时请求 `/orders/scan-order`，经过前端代理时请求 `/api/orders/scan-order`。
 
-### 第五步：访问文档
+### 5. 走通演示流程
 
-| 地址 | 说明 |
-|------|------|
-| `http://localhost:8080/doc.html` | Knife4j 接口文档 |
-| `http://localhost:8080/swagger-ui.html` | Swagger UI |
+初始化脚本提供员工账号 `admin`、`waiter`、`chef`，演示密码均为 `123456`。顾客账号通过顾客端注册。
 
----
+1. 管理员登录员工端，选择桌台并生成二维码。
+2. 顾客扫码注册、登录，选择菜品并下单。
+3. 后厨登录 `chef`，查看新订单并开始制作。
+4. 顾客在同一桌台再次提交菜品，观察是否追加到原订单。
+5. 服务员依次执行上菜、用餐中、结账，查看桌台释放和营业额变化。
+6. 顾客发送“推荐一下”，预览 AI 点餐方案，再点击确认；管理员可以修改 AI 菜品资料后重新推荐。
 
-## 🔌 接口文档
+手机扫码时需使用手机能够访问的电脑局域网地址；二维码中的 `localhost` 指向手机自身。
 
-### 通用说明
+## 关键接口
 
-- **Base URL**: `http://localhost:8080`
-- **认证方式**: `Authorization: Bearer <JWT Token>`
-- **统一成功响应**: `{"code": 1, "msg": "success", "data": {...}}`
-- **统一失败响应**: `{"code": 0, "msg": "错误描述", "data": null}`；AI 对话失败时 `data` 会保留 `MANUAL_ORDER`、错误码和空菜品列表，便于前端安全切换到手动点餐
+请求体采用 JSON，需要认证的请求携带 `Authorization: Bearer <token>`。员工与顾客使用不同类型的 JWT。
 
----
+| 方法与路径 | 用途 |
+| --- | --- |
+| `POST /employees/login` | 员工登录 |
+| `POST /users/register`、`POST /users/login` | 顾客注册、登录 |
+| `GET /categories`、`GET /dishes/on-sale` | 公开分类与在售菜单 |
+| `POST /orders/scan-order` | 顾客下单或员工代点，同桌自动加菜 |
+| `GET /orders/table/{tableId}/active` | 查询桌台活跃订单 |
+| `GET /orders/user/history` | 查询当前顾客的历史订单 |
+| `GET /orders`、`GET /orders/{id}` | 员工查询订单列表与详情 |
+| `PUT /orders/{id}/status?status=2` | 更新订单状态，服务层校验角色和流转规则 |
+| `GET /orders/statistics/today` | 管理员查询当日营业额 |
+| `POST /users/ai-order/chat` | 顾客获取推荐或补充信息提示 |
+| `POST /users/ai-order/confirm` | 顾客确认有效方案 |
+| `GET /admin/dish-ai-profiles` | 管理员查询 AI 菜品资料 |
+| `GET /admin/dish-ai-profiles/{dishId}`、`PUT /admin/dish-ai-profiles/{dishId}` | 管理员查询、维护单个菜品资料 |
 
-### 🤖 AI 点餐（顾客端）
+完整字段与管理接口请查看运行后的 API 文档。扫码下单和桌台活跃订单查询接受顾客或员工 Token；AI 点餐接口只接受顾客身份。
 
-| 方法 | 路径 | 说明 | 权限 |
-|------|------|------|:--:|
-| POST | `/users/ai-order/chat` | 自然语言点名、口味/菜系/忌口推荐或招牌推荐；只生成预览 | 顾客 JWT |
-| POST | `/users/ai-order/confirm` | 显式确认一次性方案；重复请求幂等返回原订单 | 顾客 JWT |
-| GET | `/admin/dish-ai-profiles` | 查询菜品 AI 手册 | 管理员 role=1 |
-| GET | `/admin/dish-ai-profiles/{dishId}` | 查询单个菜品 AI 手册 | 管理员 role=1 |
-| PUT | `/admin/dish-ai-profiles/{dishId}` | 新增或更新菜系、口味、配料、过敏原、招牌排序 | 管理员 role=1 |
+响应使用 [Result<T>](src/main/java/org/example/restaurant/common/Result.java)：`code=1` 表示业务成功，`code=0` 表示业务失败。客户端还需要处理 HTTP 状态码，例如 DTO 校验失败返回 400、未通过认证返回 401，不能仅以 HTTP 200 判断业务成功。
 
-对话请求示例：
+### 手动下单
 
-```json
-{
-  "tableId": 3,
-  "conversationId": null,
-  "message": "我们3个人，不吃花生，想吃清淡一点的川菜"
-}
-```
+`POST /orders/scan-order` 请求示例，ID 需替换为当前数据库中的有效值：
 
-返回 `PROPOSAL` 时只是一份待确认方案，必须把同一 `tableId`、`conversationId` 和 `proposalId` 发到确认接口才会调用现有 `placeOrder`。服务端始终从 JWT 读取 `userId`，请求体中的伪造身份不会生效。
-
-安全与生命周期规则：
-
-- 会话 Redis TTL 30 分钟，最多保留最近 20 轮；方案 TTL 10 分钟。
-- 同一用户每分钟最多 10 次 AI 对话；第 11 次会报限流，并先作废旧方案。
-- 任意新的有效消息都会立即作废旧方案，避免顾客补充过敏信息后仍确认过时菜品。
-- 点名菜品和无偏好表达（如“推荐一下”“帮我推荐几道菜”“不知道吃什么”）由本地规则处理；后者按 `signature_rank` 推荐已核验、在售的招牌菜。多轮会话中只要已有口味、菜系、人数或忌口信息，就继续交给模型应用完整上下文，不走招牌捷径。
-- DeepSeek 只能返回数据库白名单中的菜品 ID；数量、菜系、过敏原、价格和上下架状态由后端再次校验，价格以确认时数据库为准。
-- “不能吃花生”“对花生敏感”“避开花生”“不要放花生”等常见安全措辞也由后端确定性复核；过敏资料为 `UNKNOWN` 时拒绝生成方案。
-- 模型超时、429、截断/空/类型非法 JSON、未知菜品、过敏冲突或 Redis 故障一律返回 `MANUAL_ORDER` + 空列表，不回退招牌菜、不创建方案、不下单。
-- 确认使用 Redis 原子领取和 `ai_order_submission.proposal_id` 唯一键双重幂等；确认接口只负责加菜/下单，不提供删除、取消或状态修改。
-
-无偏好招牌数据由 `dish_ai_profile` 维护。`VERIFIED` 资料必须显式填写过敏原；无已知过敏原使用 `NONE`，空值不代表安全。
-
----
-
-### 🪑 桌台管理 `⭐核心`
-
-| 方法 | 路径 | 说明 | 权限 |
-|------|------|------|:--:|
-| GET | `/tables` | 查询所有桌台 | ✅ 全员 |
-| GET | `/tables/{id}` | 查询单个桌台 | ✅ 全员 |
-| POST | `/tables` | 新增桌台 | 🔒管理员 |
-| PUT | `/tables` | 修改桌台（名称、容量） | 🔒管理员 |
-| DELETE | `/tables/{id}` | 删除桌台 | 🔒管理员 |
-| **PUT** | **`/tables/{id}/status?status=1`** | **变更状态（CAS乐观锁）** | ✅ 全员 |
-
-**状态枚举**: `0`空闲 `1`占用
-
-**状态流转规则**:
-```
-0空闲 → 1占用
-1占用 → 0空闲
-```
-
-**变更状态请求示例**:
-```
-PUT /tables/1/status?status=1
-Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
-
-响应:
-{
-  "code": 1,
-  "msg": "success",
-  "data": {
-    "tableId": 1,
-    "status": 1,
-    "operatorId": 1
-  }
-}
-```
-
-**并发冲突时响应**:
-```json
-{
-  "code": 0,
-  "msg": "桌台状态已被其他操作变更，请刷新后重试",
-  "data": null
-}
-```
-
----
-
-### 📝 订单管理 `⭐核心`
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/orders?page=1&size=20` | 分页查询订单（按创建时间倒序） |
-| GET | `/orders/{id}` | 查询单个订单（含明细列表，订单详情页用） |
-| **POST** | **`/orders/scan-order`** | **🔑 扫码点餐（核心接口）** |
-| **GET** | **`/orders/table/{tableId}/active`** | **查询桌台活跃订单** |
-| **GET** | **`/orders/user/history`** | **我的历史订单（顾客端"我的"页）** |
-| **PUT** | **`/orders/{id}/status?status=2`** | **订单状态流转** |
-| **GET** | **`/orders/statistics/today`** | **今日营业额（仅管理员）** |
-
-> **`GET /orders/{id}` 为何返回明细**：通过新增的 `getOrderDetail` 方法返回 `OrderVO`（订单信息 + 明细列表，含菜名），是为适配前端订单详情抽屉——展示任意状态订单（含已结账）的菜品明细，而原 `getById` 返回的订单对象不含明细。
-
-#### 🔑 扫码点餐 `POST /orders/scan-order`
-
-这是系统最核心的接口，**一个接口智能处理两种场景**：
-
-```
-请求到达 → 查该桌台有无活跃订单（状态 IN 1,2,3,4）
-        ├── 无活跃订单 → 首次点餐：占桌台 + 建订单 + WebSocket 通知
-        └── 有活跃订单 → 加菜：追加明细 + 重算总价 + WebSocket 通知
-```
-
-> **并发处理**：同一桌两人同时提交时，后到者的占桌 CAS 会冲突。服务端用 `FOR UPDATE` 锁读绕过事务快照重查并自动转为加菜；数据库同时通过生成列唯一索引 `uk_orders_active_table` 保证每桌最多一个活跃订单。即使桌台处于“占用但无订单”的异常状态，并发插入的唯一冲突也会重查胜出订单并转为加菜。
-
-**请求体**:
 ```json
 {
   "tableId": 1,
-  "userId": 1,
   "items": [
-    {"dishId": 1, "amount": 2},
-    {"dishId": 3, "amount": 1}
+    { "dishId": 1, "amount": 2 },
+    { "dishId": 2, "amount": 1 }
   ]
 }
 ```
-> 注意：`items` 中没有 `price` 字段 — 金额完全由后端根据数据库价格重算
-> 注意：一次最多提交 50 种菜品，单个菜品数量必须为 1~99；Controller、Service 和数据库 `CHECK` 约束三层校验
-> 注意：`userId` 可空 — 顾客扫码时会被 JWT 中的 userId 覆盖（防冒名）；**员工代点餐时不传**（`placeOrder` 仅覆盖顾客 token 的 userId），订单 `user_id` 为 null，归属桌台
 
-**响应（首次点餐）**:
-```json
-{
-  "code": 1,
-  "msg": "success",
-  "data": {
-    "id": 42,
-    "tableId": 1,
-    "status": 1,
-    "statusName": "待制作",
-    "totalAmount": 84.80,
-    "createTime": "2026-06-12T19:30:00",
-    "details": [
-      {"dishId": 1, "dishName": "鱼香肉丝", "amount": 2, "price": 29.90},
-      {"dishId": 3, "dishName": "番茄蛋汤", "amount": 1, "price": 25.00}
-    ]
-  }
-}
-```
+顾客身份从 JWT 取得。前端不提交菜品价格与总价；后端查询数据库价格、校验在售状态，再计算订单金额。每次请求最多 50 个明细项，每项数量为 1～99。员工代点示例同样不需要传 `userId`。
 
-**响应（加菜 — 同一桌再次调用）**:
-```json
-{
-  "code": 1,
-  "msg": "success",
-  "data": {
-    "id": 42,                    // ← 同一个订单ID
-    "totalAmount": 134.80,       // ← 84.80 + 50.00 = 新总价
-    "details": [                 // ← 包含旧明细 + 新明细
-      {"dishId": 1, "dishName": "鱼香肉丝", "amount": 2, "price": 29.90},
-      {"dishId": 3, "dishName": "番茄蛋汤", "amount": 1, "price": 25.00},
-      {"dishId": 5, "dishName": "宫保鸡丁", "amount": 2, "price": 25.00}
-    ]
-  }
-}
-```
+### AI 推荐与确认
 
-**真实场景示例**:
-```
-张三扫桌号1的码，点了鱼香肉丝×2     → 创建订单#42，桌台1→占用
-李四同桌扫桌号1的码，点了番茄蛋汤×1  → 加菜到订单#42
-王五同桌扫桌号1的码，点了宫保鸡丁×2  → 继续加菜到订单#42
-中途张三想加菜，再扫一次码           → 继续加菜
-服务员结账                           → 订单#42→已结账，桌台1→空闲
-下一批客人扫桌号1的码               → 创建新订单#43
-```
-
-**员工代点餐**：服务员/管理员可从员工端「帮顾客点餐」页为不会扫码的顾客代下单。本接口对员工 token 同样放行（WebConfig 白名单），请求不传 `userId` 即可（DTO 字段可空，防冒名逻辑只覆盖顾客 token）——订单不关联顾客身份，归属桌台；占用桌提交自动转为加菜，与顾客扫码完全同一套逻辑。
-
-#### 订单状态流转 `PUT /orders/{id}/status`
-
-**状态枚举**: `0`已取消 `1`待制作 `2`制作中 `3`上菜 `4`用餐中 `5`已结账
-
-**角色权限矩阵**:
-
-| 角色 | 允许操作 | 不允许 |
-|:--:|------|:--:|
-| 管理员(1) | 所有合法流转 + 取消 | — |
-| 服务员(2) | 上菜(2→3)、用餐中(3→4)、结账(4→5) | 开始制作(1→2) |
-| 后厨(3) | 开始制作(1→2) | 上菜、用餐中、结账 |
-
-**数据管理权限**: 菜品/分类/桌台的增删改、员工账号管理 → **仅管理员(1)**；服务员与后厨仅有读权限。桌台状态变更（`PUT /tables/{id}/status`，手动清台兜底）全员员工可操作。
-
-**附加行为**：状态变为 `5`（已结账）或 `0`（已取消）时，**自动释放桌台**（1→0）
-
-**请求示例**:
-```
-PUT /orders/42/status?status=2
-Authorization: Bearer <后厨Token>  // role=3
-
-响应:
-{
-  "code": 1,
-  "msg": "success",
-  "data": {
-    "orderId": 42,
-    "status": 2,
-    "operatorId": 3,
-    "operatorRole": 3
-  }
-}
-```
-
-**越权示例**:
-```
-PUT /orders/42/status?status=2
-Authorization: Bearer <服务员Token>  // role=2
-
-响应:
-{
-  "code": 0,
-  "msg": "无权或非法状态变更: 1 → 2",
-  "data": null
-}
-```
-
-#### 查询桌台活跃订单 `GET /orders/table/{tableId}/active`
-
-前端扫码后可以先调此接口判断是首次点餐还是加菜，并展示当前订单内容（含明细列表）：
+`POST /users/ai-order/chat` 首轮请求：
 
 ```json
-// 无活跃订单 → 返回 null，前端展示"请点餐"
-{ "code": 1, "msg": "success", "data": null }
-
-// 有活跃订单 → 返回订单信息（含明细），前端展示"已有点餐，是否加菜？"
-{ "code": 1, "msg": "success", "data": {
-  "id": 42, "tableId": 1, "status": 4, "statusName": "用餐中",
-  "totalAmount": 59.80, "createTime": "2026-08-04T12:00:00",
-  "details": [ { "dishId": 1, "dishName": "鱼香肉丝", "amount": 2, "price": 29.90 } ]
-} }
-```
-
-#### 我的历史订单 `GET /orders/user/history`
-
-顾客端「我的」页历史订单列表（按创建时间倒序，最多 50 条，含明细）：
-
-```json
-{ "code": 1, "msg": "success", "data": [
-  {
-    "id": 42, "userId": 7, "tableId": 1, "status": 5, "statusName": "已结账",
-    "totalAmount": 59.80, "createTime": "2026-08-04T12:00:00",
-    "details": [ { "dishId": 1, "dishName": "鱼香肉丝", "amount": 2, "price": 29.90 } ]
-  }
-] }
-```
-
-> **归属规则**：接口**不接收任何参数**，`userId` 直接取自 JWT（`UserJwtInterceptor` 保证已认证），因此只能查到自己的订单，无法越权。顾客扫码下单时 `user_id` 会被 JWT 覆盖（防冒名）；**员工代点餐的订单 `user_id` 为 NULL，不会出现在任何顾客的历史里**——归属桌台，不归属顾客。
-
----
-
-### 🍳 菜品管理
-
-| 方法 | 路径 | 说明 | 权限 |
-|------|------|------|:--:|
-| GET | `/dishes` | 查询所有菜品 | ✅ 全员 |
-| GET | `/dishes/{id}` | 查询单个菜品 | ✅ 全员 |
-| POST | `/dishes` | 新增菜品 | 🔒管理员 |
-| PUT | `/dishes` | 修改菜品 | 🔒管理员 |
-| DELETE | `/dishes/{id}` | 删除菜品 | 🔒管理员 |
-| **GET** | **`/dishes/on-sale`** | **查询在售菜品（Redis缓存）** | ✅ 全员 |
-
-> 分类管理接口（`/categories` 增删改）同样仅管理员可操作；`GET /categories` 查询全员可用。
-
-**`GET /dishes/on-sale` 缓存策略**:
-- 首次请求 → 查 MySQL → 写入 Redis（TTL 1小时）
-- 后续请求 → 直接读 Redis（Cache-Aside 模式）
-- 增/改/删菜品 → 自动清除缓存
-- 数据库无数据 → 缓存空列表 60 秒（穿透防护）
-
----
-
-### 👥 员工管理
-
-| 方法 | 路径 | 说明 | 认证 | 权限 |
-|------|------|------|:--:|:--:|
-| POST | `/employees/login` | 员工登录，返回含角色的JWT | ❌ | — |
-| GET | `/employees` | 查询员工列表 | ✅ | 全员 |
-| GET | `/employees/{id}` | 查询单个员工 | ✅ | 全员 |
-| POST | `/employees` | 新增员工 | ✅ | 🔒管理员 |
-| PUT | `/employees` | 修改员工信息 | ✅ | 🔒管理员 |
-| PUT | `/employees/password` | 修改密码 | ✅ | 全员 |
-| DELETE | `/employees/{id}` | 删除员工 | ✅ | 🔒管理员 |
-
-**保护机制（最后一名管理员）**：系统强制保留至少一名管理员——删除、降级（role=1 → 其他）或禁用（status=1 → 0）最后一名管理员时，服务端返回 `至少保留一名管理员` 拒绝操作（`EmployeeServiceImpl` 守卫 + `countAdmins()` 校验）。首个管理员由 `init.sql` 种子数据提供；若管理员账号全部丢失（如早期版本误删），需直接操作数据库恢复，可复用 `init.sql` 中的 BCrypt 哈希插入一条 `role=1` 记录。
-
-**登录请求**:
-```json
-POST /employees/login
-{"username": "admin", "password": "123456"}
-
-响应:
 {
-  "code": 1,
-  "msg": "success",
-  "data": {
-    "token": "eyJhbGci...",
-    "name": "管理员"
-  }
-}
-```
-
----
-
-### 📊 管理员统计（隶属 OrdersController）
-
-| 方法 | 路径 | 说明 | 权限 |
-|------|------|------|:--:|
-| **GET** | **`/orders/statistics/today`** | 今日营业额（已结账订单总额） | 🔒 管理员(1) |
-
-**响应**:
-```json
-{
-  "code": 1,
-  "msg": "success",
-  "data": {
-    "date": "2026-06-12",
-    "totalRevenue": 3847.50
-  }
-}
-```
-
-**实现**: 通过 `order_status_log` 表统计今日结账的订单金额，确保跨日订单按实际结账时间计入：
-
-```sql
-SELECT COALESCE(SUM(o.total_amount), 0)
-FROM orders o
-JOIN order_status_log l ON o.id = l.order_id
-WHERE l.to_status = 5 AND DATE(l.create_time) = CURDATE()
-```
-
----
-
-### 🔔 WebSocket 实时通知
-
-| 端点 | 连接方式 | 接收的消息类型 |
-|------|------|------|
-| `ws://localhost:8080/ws/kitchen?token=<JWT>` | 后厨显示屏连接（仅后厨角色可连） | `NEW_ORDER`（新订单）、`ADD_ITEMS`（加菜） |
-
-**消息格式**:
-
-新订单通知:
-```json
-{
-  "type": "NEW_ORDER",
-  "orderId": 42,
   "tableId": 1,
-  "itemCount": 3,
-  "message": "🆕 新订单 #42 桌号 1，共 3 个菜品"
+  "message": "推荐一下"
 }
 ```
 
-加菜通知:
+后续对话携带响应中的 `conversationId`。响应中的 `action` 有三种：
+
+| action | 客户端处理 |
+| --- | --- |
+| `ASK_CLARIFICATION` | 展示提示，继续输入，例如补充整桌点餐人数 |
+| `PROPOSAL` | 展示菜品、数量、数据库价格、总价和推荐理由，等待确认 |
+| `MANUAL_ORDER` | 展示失败原因并提供手动点餐入口，此时没有可确认方案 |
+
+收到 `PROPOSAL` 后，使用响应中的两个 ID 调用 `POST /users/ai-order/confirm`：
+
 ```json
 {
-  "type": "ADD_ITEMS",
-  "orderId": 42,
   "tableId": 1,
-  "itemCount": 2,
-  "message": "➕ 加菜 订单 #42 桌号 1，新增 2 个菜品"
+  "conversationId": "从聊天响应复制",
+  "proposalId": "从推荐响应复制"
 }
 ```
 
-**频道隔离设计**: 连接时通过 `?token=<JWT>` 参数认证，服务端维护 `Map<String, Set<WebSocketSession>>`，握手时校验后厨角色（role=3），频道由服务端按 token 角色归置（不信任客户端参数），未来可扩展 waiter/customer 频道。
+上面的中文 ID 是说明占位符，发送时必须替换为实际返回值。确认成功的 `data` 包含 `proposalId`、`order` 和 `replayed`；重复成功确认时 `replayed=true`，不会再次加菜。
 
----
+## 核心实现与取舍
 
-## 🔐 JWT 认证与权限
+### 订单、金额与并发
 
-### Token 生成流程
+入口为 [OrdersService.placeOrder](src/main/java/org/example/restaurant/service/OrdersService.java)，实现见 [OrdersServiceImpl](src/main/java/org/example/restaurant/service/impl/OrdersServiceImpl.java)。
 
-系统生成两种类型的 JWT Token，通过 `type` claim 区分：
+- **事务边界**：首次下单中的桌台占用、订单主表与明细写入在同一订单事务中执行，避免只占桌却没有订单。
+- **金额来源**：使用数据库中的菜品价格，以 `BigDecimal` 计算；明细保存成交单价，避免菜品调价后改变已有明细的金额。
+- **首次占桌**：通过桌台状态与版本号进行条件更新，根据受影响行数判断竞争结果。条件更新仍涉及数据库锁，不代表完全不会等待。
+- **同桌加菜**：通过 `SELECT ... FOR UPDATE` 锁定已有订单，再检查状态、累计金额并插入明细，避免并发覆盖总额。
+- **数据库约束**：`orders.active_table_id` 生成列与唯一索引限制一桌只有一个活跃订单；`order_detail.amount` 的 CHECK 约束限制数量。
+- **状态变更**：校验角色与允许的流转，通过带旧状态的条件更新检测冲突，并记录状态日志；结账或取消时检查并释放桌台。
 
-**员工 Token**:
-```
-员工登录 POST /employees/login
-→ EmployeeServiceImpl.login() 验证用户名密码(BCrypt)
-→ JwtUtil.generateToken(employeeId, role) 生成Token
-→ Token Payload: {sub: "1", type: "employee", role: 1, exp: +2h}
-→ 返回给前端，前端存入 localStorage
-```
+当日营业额按结账状态日志的日期统计，相关 SQL 见 [OrdersMapper](src/main/java/org/example/restaurant/mapper/OrdersMapper.java)。这里的“结账”是业务状态操作，未接入第三方支付。
 
-**用户 Token**:
-```
-用户登录 POST /users/login
-→ UserServiceImpl.login() 验证手机号密码(BCrypt)
-→ JwtUtil.generateUserToken(userId) 生成Token
-→ Token Payload: {sub: "1", type: "user", exp: +2h}
-→ 返回给前端（无 role 字段，仅用于顾客端）
-```
+### 菜单缓存与后厨通知
 
-### Token 校验流程
+[DishServiceImpl](src/main/java/org/example/restaurant/service/impl/DishServiceImpl.java) 对在售菜单使用 Redis 缓存：普通结果缓存 1 小时，空结果缓存 60 秒；菜品变更后删除缓存。Redis 读写失败时，菜单查询可回到数据库。删除缓存失败可能导致旧菜单保留到过期，当前不提供严格一致性保证。
 
-系统使用**双拦截器**区分员工端和用户端，按 token 类型隔离：
+订单通知在事务提交后发送，通知失败不会撤销已提交订单。[KitchenWebSocketHandler](src/main/java/org/example/restaurant/websocket/KitchenWebSocketHandler.java) 使用内存中的连接集合，通过 `/ws/kitchen?token=<JWT>` 向后厨推送；连接建立后校验员工类型和厨师角色，不合格连接会关闭。当前没有跨实例广播或持久化消息重投机制。
 
-```
-请求到达 → 路径匹配
-  ├── /employees/**, /orders/** ...
-  │     → JwtInterceptor 校验 token 类型必须为 "employee"
-  │     → 解析 employeeId + role → 存入 UserContext
-  │
-  ├── /users/**, /orders/scan-order, /orders/table/**, /orders/user/**
-  │     → UserJwtInterceptor 校验 token 类型必须为 "user"
-  │     → 解析 userId → 存入 UserContext
-  │
-  └── /users/login, /users/register, /employees/login, /ws/**, /doc.html ...
-        → 直接放行（无需 Token）
+### AI 点餐边界
+
+对外入口为 [AiOrderingService](src/main/java/org/example/restaurant/service/AiOrderingService.java) 的 `chat` 与 `confirm`，确认复用已有下单流程。
+
+```text
+chat
+ ├── 明确菜名、数量且无额外约束 → 本地匹配
+ ├── 不含额外偏好的“推荐一下” → 本地招牌排序
+ └── 口味、菜系等需求 → DeepSeek 结构化选择
+             ↓
+       服务端校验并生成预览 → Redis 保存方案
+                                      ↓
+confirm → MySQL 提交记录去重 → 领取有效方案 → OrdersService.placeOrder
 ```
 
-**员工 Token 校验**:
+- 候选集仅包含在售且 AI 资料标记为 `VERIFIED` 的菜品；缺少 AI 资料不影响手动点餐。
+- 模型选择候选菜品 ID、数量并给出理由。后端校验响应结构、ID、数量、合并后的重复项及已识别的忌口、菜系条件，价格由数据库提供。
+- 过敏原资料为空或 `UNKNOWN` 表示未知，不等同于没有过敏原；有相关忌口时会拒绝缺少资料的候选。规则依赖资料与文本识别，不能覆盖所有自然语言表达。
+- 模型调用发生在推荐阶段，订单事务只在确认阶段开启。远程调用失败返回手动点餐提示，不会因失败自动生成招牌菜方案。
+- Redis 会话绑定顾客与桌台，默认 30 分钟滑动过期，保留最近 20 轮；方案默认 10 分钟过期。新一轮请求开始时旧方案即失效，晚到的旧轮次结果不会覆盖新结果。
+- 默认每位顾客每分钟最多 10 次聊天请求、单条最多 500 字。状态与限流配置见 [AiOrderingStateProperties](src/main/java/org/example/restaurant/config/AiOrderingStateProperties.java)。
+- `ai_order_submission.proposal_id` 唯一约束用于确认去重，提交记录与订单写入处于同一 MySQL 事务。成功重试返回关联订单的**当前详情**，没有保存首次响应快照。
+- Redis 领取方案不随 MySQL 事务回滚；若领取后下单失败，原方案不能继续确认，需要重新推荐。
+
+实现入口：[推荐规则](src/main/java/org/example/restaurant/service/impl/AiOrderingServiceImpl.java)、[DeepSeek 适配器](src/main/java/org/example/restaurant/ai/DeepSeekDishSelectionAdapter.java)、[会话与方案](src/main/java/org/example/restaurant/ai/state/RedisAiOrderConversationManager.java)、[确认与去重](src/main/java/org/example/restaurant/service/impl/AiOrderConfirmationServiceImpl.java)。
+
+### 可选：启用 DeepSeek
+
+未配置 API Key 时可以运行普通点餐和本地推荐规则；需要远程模型的请求会返回 `MANUAL_ORDER`。MySQL、Redis 和 JWT 等基础配置仍需正确。
+
+在本地配置中加入，或使用对应环境变量：
+
+```yaml
+restaurant:
+  ai:
+    enabled: true
+    base-url: https://api.deepseek.com
+    api-key: ${DEEPSEEK_API_KEY:}
+    model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
+    connect-timeout: 3s
+    read-timeout: 15s
+    max-tokens: 1024
 ```
-请求到达 → JwtInterceptor.preHandle()
-→ 从 Header 取 "Authorization: Bearer <token>"
-→ JwtUtil.parseTokenType(token) 校验类型为 "employee"
-→ JwtUtil.parseUserId(token) 解析员工ID
-→ JwtUtil.parseRole(token) 解析角色
-→ UserContext.setEmployeeId() + UserContext.setRole() 存入ThreadLocal
-→ Controller/Service 通过 UserContext 获取当前用户信息
-→ afterCompletion() 中 UserContext.clear() 清理
-```
 
-**用户 Token 校验**:
-```
-请求到达 → UserJwtInterceptor.preHandle()
-→ 从 Header 取 "Authorization: Bearer <token>"
-→ JwtUtil.parseTokenType(token) 校验类型为 "user"
-→ JwtUtil.parseUserId(token) 解析用户ID
-→ UserContext.setUserId() 存入ThreadLocal
-→ afterCompletion() 中 UserContext.clear() 清理
-```
+环境变量还包括 `DEEPSEEK_ENABLED`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_CONNECT_TIMEOUT`、`DEEPSEEK_READ_TIMEOUT` 和 `DEEPSEEK_MAX_TOKENS`。模型名是当前仓库配置默认值，实际可用性取决于服务提供方。
 
-### 角色定义
+当前使用 RestClient + Jackson，未引入 Spring AI，也没有 RAG、向量数据库或自主工具执行链路。
 
-| 值 | 名称 | 权限范围 | 典型用户 |
-|:--:|------|------|------|
-| 1 | 管理员 | 全部操作 + 营业额统计 | 店长/老板 |
-| 2 | 服务员 | 桌台管理、上菜(2→3)、用餐中(3→4)、结账(4→5) | 前台/服务员 |
-| 3 | 后厨 | 查看订单、开始制作(1→2) | 厨师 |
+## 测试与验证
 
-### 路径拦截白名单
+### 不连接真实数据库或模型的测试
 
-**员工拦截器** (`JwtInterceptor`) 覆盖 `/**`，排除以下路径：
-
-| 排除路径 | 原因 |
-|------|------|
-| `/employees/login` | 员工登录 |
-| `/users/**` | 用户端路径，由 UserJwtInterceptor 处理 |
-| `/orders/scan-order` | 扫码点餐，顾客和员工均可访问 |
-| `/orders/table/**` | 查询桌台活跃订单，顾客扫码后使用 |
-| `/orders/user/**` | 顾客历史订单，顾客端「我的」页使用 |
-| `/dishes/on-sale` | 顾客扫码后浏览在售菜品 |
-| `/categories` | 顾客扫码后查看菜单分类（与在售菜品同属公开菜单信息） |
-| `/swagger-ui/**`, `/v3/api-docs/**`, `/doc.html`, `/webjars/**` | API 文档 |
-| `/ws/**` | WebSocket 连接（握手时自行校验 JWT） |
-| `/error` | Spring 错误页 |
-
-**用户拦截器** (`UserJwtInterceptor`) 覆盖以下路径，排除 `/users/login` 和 `/users/register`：
-
-| 覆盖路径 | 说明 |
-|------|------|
-| `/users/**` | 查询个人信息 `/users/me`（注册/登录已放行） |
-| `/orders/scan-order` | 扫码点餐 |
-| `/orders/table/**` | 查询桌台活跃订单 |
-| `/orders/user/**` | 我的历史订单 |
-
-> 注意：`/orders/scan-order`、`/orders/table/**`、`/orders/user/**` 被员工拦截器排除、由用户拦截器接管，确保顾客（用户 token）可以正常扫码点餐、查询自己的历史订单。
-
----
-
-## 🧪 测试
-
-### 运行测试
+可以先运行一组不需要 MySQL、Redis 或真实 DeepSeek 的测试：
 
 ```powershell
-mvn test
+.\mvnw.cmd "-Dtest=ScanOrderDTOValidationTest,OrdersServiceImplUnitTest,DeepSeekDishSelectionAdapterTest,AiClientConfigTest" test
 ```
 
-### 测试策略
+它们分别检查 DTO 约束、使用 Mock Mapper 的订单规则、模拟 HTTP 响应的模型适配器、AI 客户端配置。首次执行仍需要下载 Maven 依赖。
 
-- **框架**: JUnit 5 + `@SpringBootTest`
-- **环境选择**: 纯单元测试不连接外部服务；需要验证现有 schema 的集成/全链路测试按任务约定连接本地 MySQL/Redis，并用 UUID 与捕获 ID 隔离数据
-- **事务**: 测试**不使用** `@Transactional` 自动回滚（`updateStatus` 用 REQUIRES_NEW，测试数据必须真实提交才能被读到），改为 `@BeforeEach`/`@AfterEach` 手动清理
-- **清理策略**: 共享本地库测试使用 UUID 标识并捕获生成 ID；`@AfterEach` 只按精确 ID/唯一前缀删除。Redis 使用每次运行唯一命名空间和 `SCAN` 精确清理，禁止 `FLUSHDB`、`KEYS *` 和宽泛 `LIKE` 删除
-- **风险选测**: 确定性测试在代码/配置/数据未变化时不机械重跑；事务、鉴权、迁移和过敏安全按 R4 门禁执行。只有并发竞态测试采用多轮重复运行
-- **每个测试方法独立运行**，不依赖执行顺序
+### 数据库、Redis 与并发集成测试
 
-AI 相关门禁还包括：HTTP→JWT→菜品手册→Redis→确认→现有下单服务的全链路测试、20 轮同方案并发确认幂等测试、迁移双跑不覆盖资料，以及 DeepSeek 严格 JSON 契约测试。真实 DeepSeek 冒烟默认跳过，配置 Key 后显式运行（会访问公网并产生少量 token 费用）：
+[测试目录](src/test/java/org/example/restaurant) 包含订单创建与加菜、状态流转、活跃订单唯一约束、AI 多轮会话、过期替换、身份校验和重复确认等测试。
+
+**部分集成测试使用 `test` Profile，部分使用 `local` Profile；`application-test.yml` 还可能导入本地配置。Profile 名称不代表数据库已经隔离。** 运行前必须确认实际数据源指向可丢弃的测试库，Redis 也使用独立测试实例或配置；测试可能写入、修改和清理数据。
+
+完成隔离配置后，可排除真实模型测试运行其余测试：
 
 ```powershell
-$env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
-./mvnw.cmd -Dtest=DeepSeekLiveDishSelectionTest test
+.\mvnw.cmd "-Dtest=*,!DeepSeekLiveDishSelectionTest" test
 ```
 
-### 测试覆盖清单
+测试报告位于 `target/surefire-reports/`。运行结果以当次输出与报告为准，本 README 不维护固定测试数量或未经验证的“全量通过”声明。
 
-**TableInfoServiceTest（7个用例）**:
+### 真实模型冒烟测试
 
-| 用例 | 验证点 |
-|------|------|
-| `shouldTransitionFromIdleToOccupied` | 0→1 正常流转 + version递增 |
-| `shouldTransitionFromOccupiedToIdle` | 1→0 正常流转 + version累加 |
-| `shouldThrowWhenIllegalTransition` | 相同状态流转拒绝 |
-| `shouldThrowWhenOccupiedToReserved` | 占用→非法状态拒绝 |
-| `shouldThrowWhenOptimisticLockConflict` | 过期version导致CAS失败 |
-| `shouldVersionIncrementCorrectly` | 连续操作version正确累加 |
-| `shouldThrowWhenTableNotExists` | 不存在的桌台抛异常 |
+[DeepSeekLiveDishSelectionTest](src/test/java/org/example/restaurant/ai/DeepSeekLiveDishSelectionTest.java) 在环境变量 `DEEPSEEK_API_KEY` 为非空且不是 `NOT_SET` 时启用；该条件不会预先检查 Key 是否有效。它会访问真实模型并可能产生费用。
 
-**OrdersServiceTest（28个测试方法）**:
-
-| 用例分类 | 用例 | 验证点 |
-|------|------|------|
-| 首次点餐 | `shouldCreateOrderAndLockTable` | 创建订单 + 桌台占用 + 金额正确 |
-| | `shouldRecalculateAmountCorrectly_MultipleItems` | 多菜品金额累加 |
-| 加菜 | `shouldAddItemsToExistingOrder` | 同一订单追加 + 总价更新 |
-| | `shouldAddItemsMultipleTimes` | 多次加菜累加正确 |
-| | `multiplePeopleSameTableShouldAddToSameOrder` | 三人同桌共享订单 |
-| | `shouldAllowAddItemsInEveryActiveStatus` | 状态1~4均可加菜 |
-| 并发 | `concurrentCheckoutShouldOnlySucceedOnce` | 重复20轮验证并发结账仅一个成功、仅一条日志、营业额不重复 |
-| | `concurrentOrdersOnPreOccupiedTableShouldShareOneActiveOrder` | 重复20轮验证异常预占桌并发下单归并为一个订单 |
-| 释放+再点 | `shouldReleaseTableAfterSettlement` | 结账→桌台释放 |
-| | `shouldReleaseTableAfterCancel` | 取消→桌台释放 |
-| | `shouldCreateNewOrderAfterPreviousSettled` | 释放后新客人建新订单 |
-| 菜品校验 | `shouldFailWhenDishNotExists` | 不存在菜品拒绝 |
-| | `shouldFailWhenDishOffSale` | 下架菜品拒绝（首次） |
-| | `shouldFailWhenAddItemsWithOffSaleDish` | 下架菜品拒绝（加菜） |
-| 数量校验 | `shouldRejectInvalidQuantitiesAtServiceBoundary` 等 | Service直调仍拒绝空值、负数、0、超过99和超过50种菜品 |
-| 角色权限 | `chefShouldTransitionFromPendingToCooking` | 后厨 1→2 |
-| | `chefShouldNotTransitionToServing` | 后厨不能上菜 |
-| | `waiterShouldTransitionFromCookingToServing` | 服务员 2→3 |
-| | `waiterShouldTransitionFromServingToDining` | 服务员 3→4 |
-| | `waiterShouldCheckout` | 服务员 4→5 |
-| | `waiterShouldNotStartCooking` | 服务员不能制作 |
-| | `adminShouldHaveFullPermission` | 管理员全权限 |
-| 安全 | `shouldIgnoreFrontendPrice` | 金额由后端重算（首次+加菜） |
-| 取消 | `shouldAllowCancelFromAnyState` | 待制作→取消 |
-| 顾客历史 | `userHistoryShouldOnlyIncludeOwnOrders` | 订单归属 JWT 用户（防冒名）；代点单 user_id 为 NULL 不入顾客历史 |
-
-**EmployeeServiceTest（4个用例）**:
-
-| 用例 | 验证点 |
-|------|------|
-| `shouldRejectDemotingLastAdmin` | 降级最后一名管理员被拒绝 |
-| `shouldRejectDisablingLastAdmin` | 禁用最后一名管理员被拒绝 |
-| `shouldRejectDeletingLastAdmin` | 删除最后一名管理员被拒绝 |
-| `shouldAllowDemotingAdminWhenAnotherAdminExists` | 存在第二名管理员时允许降级 |
-
-**UserServiceTest（2个用例）**:
-
-| 用例 | 验证点 |
-|------|------|
-| `shouldRejectDuplicatePhoneWithFriendlyMessage` | 重复手机号注册返回"手机号已被注册"友好提示 |
-| `shouldRejectDuplicatePhoneAtDbLevel` | 绕过 Service 查重直接插入 → DB 唯一索引兜底抛 `DuplicateKeyException` |
-
-**新增边界与数据库约束测试（10个测试方法）**:
-
-- `ScanOrderDTOValidationTest`：验证嵌套 `Item` 级联校验、null元素、数量上下限和菜品种类上限。
-- `OrdersServiceImplUnitTest`：确定性模拟“查询时活跃、拿锁时已结账”和“活跃订单唯一冲突转加菜”。
-- `ActiveOrderConstraintTest`：验证同桌第二个活跃订单被数据库拒绝，终态订单及空桌订单不受影响。
-
----
-
-## 🏗️ 技术深度 — 设计决策
-
-### 1. 为什么桌台用乐观锁，加菜用悲观锁？
-
-| 维度 | 桌台抢占（乐观锁） | 加菜（悲观锁） |
-|------|------|------|
-| 冲突概率 | 低（同一桌同时下单概率小） | 高（同一订单并发加菜频繁） |
-| 锁粒度 | 单行 + version字段 | 单行 FOR UPDATE |
-| 阻塞行为 | 不阻塞；冲突时锁读重查自动转加菜，无需客户端重试 | 阻塞等待，保证串行化 |
-| SQL | `UPDATE ... WHERE version=#{v}`；冲突后 `SELECT ... FOR UPDATE` 重查 | `SELECT ... FOR UPDATE` |
-| 适用场景 | 读多写少 | 写操作需要严格顺序 |
-
-**决策逻辑**：不是"乐观锁一定比悲观锁好"或反之，而是**根据实际冲突概率选择**。桌台冲突少→乐观锁减少锁开销；加菜必改同一行→悲观锁防丢失更新。若桌台抢占真的发生冲突（两人同时下单），CAS 失败后服务端用 `FOR UPDATE` 锁读绕过事务快照重查，自动转为加菜——客户端全程无感知。
-
-### 2. 为什么用 Cache-Aside 而不是 Spring @Cacheable？
-
-| 维度 | Cache-Aside（手动） | @Cacheable（注解） |
-|------|------|------|
-| 缓存逻辑可见性 | 代码中显式读写缓存 | 隐藏在 AOP 切片中 |
-| 穿透防护 | 手动实现（空值短TTL） | 需额外配置 |
-| 失效策略 | 精确控制（add/update/delete时删key） | @CacheEvict 注解 |
-| 调试难度 | 低，直接看代码 | 高，需跟踪代理 |
-
-**决策**：Cache-Aside 让缓存逻辑对开发者完全可见，面试时可以逐行讲解。生产环境中对于简单场景 @Cacheable 更省代码，复杂场景 Cache-Aside 更可控。
-
-### 3. 为什么金额在 Service 计算而不是 SQL 聚合？
-
-- **安全性**：在 Service 层逐菜品校验（存在性、在售状态）后计算，可以在计算前拦截异常菜品
-- **可测试性**：Service 层计算逻辑可直接单元测试，SQL 聚合较难脱离数据库测试
-- **可扩展性**：未来加折扣、优惠券、会员价等逻辑，在 Service 层扩展更方便
-
----
-
-## 🔒 安全设计
-
-| 安全措施 | 实现方式 | 防护目标 |
-|------|------|------|
-| 金额后端重算 | DTO 不含 price 字段，查DB真实价格计算 | 防止前端篡改价格 |
-| 密码加密 | BCrypt 哈希（每用户独立盐值） | 数据库泄露后密码不可逆 |
-| 双 Token 类型隔离 | JWT 含 type claim（employee/user），拦截器交叉校验 | 防止用户 token 越权访问员工接口，反之亦然 |
-| JWT 过期 | Token 有效期 2 小时 | 限制泄露 Token 影响时间 |
-| 角色权限 | JWT 含 role + 业务层二次校验 | 防止越权操作 |
-| 数据管理写操作鉴权 | 员工/菜品/分类/桌台增删改时 Controller 层校验 role==1 | 防止服务员/后厨越权管理数据 |
-| 管理员保底 | 删除/降级/禁用最后一名管理员时拒绝（`countAdmins()==1` 守卫） | 防止系统失去管理入口 |
-| 注册查重 | Service 层 `findByPhone` 预检 + DB 唯一索引 `uk_phone` 兜底（捕获 `DuplicateKeyException` 转友好提示） | 防止手机号重复注册（含并发间隙） |
-| 用户信息查询防越权 | `GET /users/me` 从 JWT token 提取 userId，不接受前端传 ID | 防止用户查他人信息 |
-| 扫码点餐防冒名 | `placeOrder()` 用 `UserContext.getUserId()` 覆盖 DTO 中的 userId | 防止冒名下单 |
-| 订单列表分页 | `LIMIT offset, size` + 参数校验（size 上限 100） | 防止全量返回导致内存/网络压力 |
-| 桌台并发 | CAS 乐观锁（version + WHERE 条件） | 防止重复占用 |
-| 加菜并发 | SELECT FOR UPDATE 行锁 | 防止丢失更新 |
-| 加菜终态复检 | 拿到订单行锁后重新校验状态1~4 | 防止等待锁期间已结账的订单继续加菜 |
-| 状态流转并发 | `UPDATE ... WHERE id=? AND status=?` CAS + 检查影响行数 | 防止重复结账、重复状态日志和营业额重复统计 |
-| 活跃订单唯一性 | 生成列 `active_table_id` + 唯一索引 | 数据库保证每桌最多一个状态1~4订单 |
-| 数量边界 | DTO级联校验 + Service兜底 + DB CHECK | 防止负数、0或超大数量造成错账 |
-| 异常统一处理 | GlobalExceptionHandler | 不泄露内部错误细节 |
-| 审计日志 | OrderStatusLog（订单状态流转） | 营业额统计依据 |
-
----
-
-## 📊 数据库设计（核心表）
-
-### table_info（桌台信息）
-
-```sql
-CREATE TABLE table_info (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(50) NOT NULL,          -- 桌台名称 "A1"
-    capacity INT DEFAULT 4,             -- 可容纳人数
-    status INT DEFAULT 0,               -- 0空闲 1占用
-    version INT DEFAULT 0,              -- 乐观锁版本号
-    create_time DATETIME,
-    update_time DATETIME
-);
+```powershell
+.\mvnw.cmd "-Dtest=DeepSeekLiveDishSelectionTest" test
 ```
 
-### orders（订单）
+直接执行未排除该类的全量 `test`，也可能在已设置 Key 时触发真实调用；`live-ai` 标签本身不会自动排除它。
 
-```sql
-CREATE TABLE orders (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    user_id BIGINT,                     -- 下单用户
-    table_id BIGINT,                    -- 关联桌台
-    status INT DEFAULT 1,               -- 0取消 1待制作 2制作中 3上菜 4用餐中 5已结账
-    total_amount DECIMAL(10,2),         -- 订单总金额（后端重算）
-    create_time DATETIME,
-    active_table_id BIGINT GENERATED ALWAYS AS (
-        CASE WHEN status IN (1,2,3,4) THEN table_id ELSE NULL END
-    ) STORED,
-    UNIQUE KEY uk_orders_active_table (active_table_id)
-);
-```
+## 当前限制与后续改进
 
-### order_detail（订单明细）
+- **预算约束**：当前会根据数据库价格计算推荐总额，但尚未实现独立解析预算并强制拒绝超预算方案的完整校验，不能承诺推荐始终满足预算。
+- **确认时的数据变化**：下单会重新读取菜品价格并检查在售状态，但没有锁定预览价格，也未在确认阶段重新校验整套 AI 资料和忌口条件。
+- **错误分类**：模型超时、限流、非法响应等当前主要统一为 `AI_UNAVAILABLE`；会话层有独立错误码，尚未细分全部模型错误。
+- **部署范围**：当前后厨通知基于单进程连接集合；WebSocket 配置允许所有 Origin，API 文档默认开放，尚需按实际部署环境收紧配置。
+- **推荐评估**：已有规则与失败场景测试，尚无基于真实顾客数据的推荐效果评估或生产容量指标。
 
-```sql
-CREATE TABLE order_detail (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    order_id BIGINT,                    -- 关联订单
-    dish_id BIGINT,                     -- 菜品ID
-    amount INT NOT NULL,                -- 数量，限制1~99
-    price DECIMAL(10,2),                -- 下单时的菜品单价
-    CONSTRAINT chk_order_detail_amount CHECK (amount BETWEEN 1 AND 99)
-);
-```
+进一步完善时，可优先补齐预算与确认校验、统一测试环境隔离，再按部署需求考虑通知可靠性和多实例支持。
 
-### 已部署环境增量迁移
+## 阅读代码的建议顺序
 
-已有数据库不会因为更新 `init.sql` 自动获得新约束。发布新版应用前后需按文件内说明依次执行：
-
-1. `db/migration/20260814_01_order_detail_amount_check.sql`：先检查异常数量，再增加数量 `CHECK`；
-2. `db/migration/20260814_02_one_active_order_per_table.sql`：先检查重复活跃订单和桌台状态，再增加生成列唯一索引；
-3. `db/migration/20260827_01_ai_ordering_profile.sql`：非破坏性创建 `dish_ai_profile`，并仅补齐缺失的招牌/过敏原手册；重复执行不会覆盖管理员后来维护的资料；
-4. `db/migration/20260827_02_ai_order_submission.sql`：创建 AI 确认幂等表及 `proposal_id` 唯一索引。
-
-只读检查返回异常记录时必须人工核对，不能直接执行DDL或自动删除订单。
-
-### 订单状态日志表
-
-- `order_status_log`: order_id, from_status, to_status, operator_id, create_time
-  - 用途：按结账时间（to_status=5）统计当日营业额，避免依赖订单创建时间造成的误差
-
----
-
-## 📝 开发规范
-
-- **三层架构**: Controller → Service(接口) → ServiceImpl → Mapper
-- **面向接口编程**: Controller 注入 Service 接口，不依赖实现类
-- **全注解 MyBatis**: 零 XML 配置，SQL 直接写在 `@Select`/`@Insert`/`@Update` 中
-- **Lombok**: `@Data` 自动生成 getter/setter，减少样板代码
-- **统一响应**: 所有接口返回 `Result<T>` 格式 `{code, msg, data}`
-- **异常处理**: 业务异常抛 `BusinessException` → `GlobalExceptionHandler` 捕获
-- **事务边界**: 核心下单操作标注 `@Transactional`，Service 层控制事务
-- **包结构**: 按功能分包（controller/service/mapper/entity/dto/common），非按层分包
-
----
-
-*项目版本: 0.0.1-SNAPSHOT — 2026年6月*
+1. [ScanOrderDTO](src/main/java/org/example/restaurant/dto/ScanOrderDTO.java) → [OrdersController](src/main/java/org/example/restaurant/controller/OrdersController.java)：请求怎样进入后端。
+2. [OrdersServiceImpl](src/main/java/org/example/restaurant/service/impl/OrdersServiceImpl.java) → [OrdersMapper](src/main/java/org/example/restaurant/mapper/OrdersMapper.java)、[OrderDetailMapper](src/main/java/org/example/restaurant/mapper/OrderDetailMapper.java)：首次下单、加菜与金额计算。
+3. [init.sql](src/main/resources/db/init.sql) → [订单测试](src/test/java/org/example/restaurant/service/OrdersServiceTest.java)：表结构与业务约束如何对应。
+4. [WebConfig](src/main/java/org/example/restaurant/config/WebConfig.java) → [UserJwtInterceptor](src/main/java/org/example/restaurant/interceptor/UserJwtInterceptor.java)：登录身份如何进入请求上下文。
+5. [AiOrderingServiceImpl](src/main/java/org/example/restaurant/service/impl/AiOrderingServiceImpl.java) → [AiOrderConfirmationServiceImpl](src/main/java/org/example/restaurant/service/impl/AiOrderConfirmationServiceImpl.java)：推荐、状态管理与真正下单如何衔接。
