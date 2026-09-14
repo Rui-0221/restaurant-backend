@@ -9,6 +9,10 @@ import lombok.Data;
 
 @Data
 public class AiOrderChatDTO {
+    @NotBlank(message = "请求ID不能为空")
+    @Pattern(regexp = "[A-Za-z0-9_-]{1,64}", message = "请求ID格式错误")
+    private String requestId;
+
     @NotNull(message = "桌台ID不能为空")
     @Positive(message = "桌台ID必须大于0")
     private Long tableId;

@@ -1,20 +1,9 @@
 package org.example.restaurant.ai.state;
-
-import org.example.restaurant.ai.AiOrderingResponse;
-
-import java.util.Optional;
-
+import org.example.restaurant.ai.*;
 public interface AiOrderConversationManager {
-    AiConversationContext openTurn(Long userId, Long tableId, String conversationId, String message);
-
-    AiTurnCompletion completeTurn(
-            AiConversationContext context, String userMessage, AiOrderingResponse response);
-
-    Optional<StoredAiProposal> loadActiveProposal(Long userId, Long tableId, String conversationId);
-
-    default Optional<StoredAiProposal> claimActiveProposal(
-            Long userId, Long tableId, String conversationId, String proposalId) {
-        return loadActiveProposal(userId, tableId, conversationId)
-                .filter(proposal -> proposalId != null && proposalId.equals(proposal.proposalId()));
-    }
+    AiConversationContext openTurn(AiOrderingRequest request, long mealVersion);
+    void completeTurn(AiConversationContext context, String message,
+                      AiOrderingResponse response, DiningPreferences preferences);
+    boolean isCancelled(AiConversationContext context);
+    void cancel(Long userId, String requestId);
 }

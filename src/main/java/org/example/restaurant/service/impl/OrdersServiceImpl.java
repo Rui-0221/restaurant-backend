@@ -19,11 +19,15 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.HexFormat;
 import java.util.stream.Collectors;
 
 @Service
@@ -50,6 +54,9 @@ public class OrdersServiceImpl implements OrdersService {
 
     @Autowired
     private KitchenWebSocketHandler kitchenWebSocketHandler;
+
+    @Autowired
+    private OrderSubmissionMapper orderSubmissionMapper;
 
     // ==================== 基础查询 ====================
 
@@ -132,17 +139,61 @@ public class OrdersServiceImpl implements OrdersService {
             dto.setUserId(currentUser);
         }
 
+        Long replayOrderId = claimSubmission(dto);
+        if (replayOrderId != null) return getOrderDetail(replayOrderId);
+
         // 1. 检查该桌台是否有活跃订单
         List<Orders> activeOrders = ordersMapper.findActiveByTableId(dto.getTableId());
 
+        OrderVO result;
         if (activeOrders != null && !activeOrders.isEmpty()) {
             // ========== 有活跃订单 → 加菜 ==========
             Orders existingOrder = activeOrders.get(0);
-            return addItemsToOrder(existingOrder.getId(), dto.getItems());
+            result = addItemsToOrder(existingOrder.getId(), dto.getItems());
         } else {
             // ========== 无活跃订单 → 首次点餐 ==========
-            return createNewOrder(dto);
+            result = createNewOrder(dto);
         }
+        if (dto.getRequestId() != null
+                && orderSubmissionMapper.complete(dto.getRequestId(), result.getId()) != 1) {
+            throw new BusinessException("下单请求状态异常，请重试");
+        }
+        return result;
+    }
+
+    private Long claimSubmission(ScanOrderDTO dto) {
+        String requestId = dto.getRequestId();
+        if (requestId == null) return null; // 兼容尚未发送请求 ID 的旧客户端。
+        if (!requestId.matches("[A-Za-z0-9_-]{1,64}")) {
+            throw new BusinessException("请求ID格式错误");
+        }
+        String actor;
+        if (UserContext.getUserId() != null) actor = "user:" + UserContext.getUserId();
+        else if (UserContext.getEmployeeId() != null) actor = "employee:" + UserContext.getEmployeeId();
+        else throw new BusinessException("请先登录");
+        String items = dto.getItems().stream()
+                .map(item -> item.getDishId() + ":" + item.getAmount())
+                .sorted().collect(Collectors.joining(","));
+        String hash;
+        try {
+            hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(
+                    (dto.getTableId() + "|" + dto.getUserId() + "|" + items)
+                            .getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
+        OrderSubmission submission = new OrderSubmission();
+        submission.setRequestId(requestId);
+        submission.setActor(actor);
+        submission.setRequestHash(hash);
+        if (orderSubmissionMapper.insertIfAbsent(submission) == 1) return null;
+        OrderSubmission existing = orderSubmissionMapper.findForUpdate(requestId);
+        if (existing == null || !actor.equals(existing.getActor())
+                || !hash.equals(existing.getRequestHash())) {
+            throw new BusinessException("请求ID已用于其他下单，请刷新后重试");
+        }
+        if (existing.getOrderId() == null) throw new BusinessException("下单正在处理，请稍后重试");
+        return existing.getOrderId();
     }
 
     /**
@@ -325,8 +376,6 @@ public class OrdersServiceImpl implements OrdersService {
      * 校验菜品并重算金额（后端强制计算，不信任前端任何价格数据）
      */
     private DishAndDetail validateAndBuildDetails(List<ScanOrderDTO.Item> items) {
-        validateRequestedItems(items);
-
         BigDecimal total = BigDecimal.ZERO;
         List<OrderDetail> details = new ArrayList<>();
         Map<Long, String> dishNameMap = new java.util.HashMap<>();

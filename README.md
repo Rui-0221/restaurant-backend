@@ -4,7 +4,7 @@
 
 - **后端**：Java 17、Spring Boot、MyBatis、MySQL、Redis。
 - **前端**：[restaurant-frontend](https://github.com/Rui-0221/restaurant-frontend)，包含 Vue 3 + Vant 顾客端、Vue 3 + Element Plus 员工端。
-- **AI 接入**：通过 Spring RestClient 调用 DeepSeek，结合本地推荐规则与服务端校验。
+- **AI 接入**：通过 JDK HttpClient 调用 DeepSeek，统一模型理解与服务端结构化校验。
 
 本项目用于学习和功能演示。下文说明当前实现、运行方式与已知限制；测试代码的存在不代表所有环境下已经验证通过。
 
@@ -12,13 +12,13 @@
 
 | 使用者 | 主要功能 |
 | --- | --- |
-| 顾客 | 注册登录、浏览在售菜品、扫码下单、同桌加菜、查看个人历史订单、AI 推荐与确认 |
+| 顾客 | 注册登录、浏览在售菜品、扫码下单、同桌加菜、查看个人历史订单、AI 推荐加入购物车 |
 | 服务员 | 代顾客点餐、处理上菜与用餐状态、结账 |
 | 后厨 | 接收订单通知、开始制作 |
 | 管理员 | 员工、分类、菜品、桌台管理，查看营业额，维护菜品 AI 资料 |
 
 ```text
-顾客扫码入座 → 浏览菜单 → 手动选菜 / AI 推荐后确认
+顾客扫码入座 → 浏览菜单 → 手动选菜 / AI 推荐加入购物车
                               ↓
                        创建订单 / 同桌加菜
                               ↓
@@ -38,11 +38,11 @@
 | Java 17 / Spring Boot 3.2.5 | Web 接口、依赖注入、配置与事务 |
 | MyBatis Spring Boot Starter 3.0.3 | Mapper 接口与注解 SQL；这里的版本是 Starter 版本 |
 | MySQL 8.0.16+ | 业务数据、事务、行锁、唯一索引与 CHECK 约束 |
-| Redis | 在售菜单缓存、AI 会话、待确认方案与请求限流 |
+| Redis | 在售菜单缓存、AI 会话、需求状态、取消与限流 |
 | Spring WebSocket | 向后厨连接推送新订单、加菜等通知 |
 | JJWT / Spring Security Crypto | JWT 签发与校验、BCrypt 密码哈希 |
 | Jakarta Validation / Knife4j | 请求参数校验、交互式 API 文档 |
-| RestClient / Jackson | DeepSeek HTTP 调用与结构化响应解析 |
+| JDK HttpClient / Jackson | DeepSeek HTTP 调用与结构化响应解析 |
 | JUnit 5 / Mockito / Spring Test | 单元测试、模拟 HTTP 测试、数据库与并发集成测试 |
 
 依赖版本以 [pom.xml](pom.xml) 为准。当前认证使用自定义 MVC 拦截器；引入的 Spring Security Crypto 用于密码处理。
@@ -58,7 +58,7 @@ src/main/java/org/example/restaurant/
 ├── entity/         数据库实体及查询结果对象
 ├── dto/            请求与响应对象
 ├── ai/             AI 协议、候选菜品选择、DeepSeek 适配器
-│   └── state/      Redis 会话、方案与并发轮次管理
+│   └── state/      Redis 会话、取消与并发轮次管理
 ├── interceptor/    员工与顾客 JWT 校验
 ├── websocket/      后厨通知处理
 ├── common/         Result、异常处理、JWT、请求用户上下文
@@ -77,7 +77,7 @@ src/test/           单元测试与集成测试
 HTTP → JWT 拦截器 → Controller → Service → Mapper → MySQL
                                   │
                                   ├── Redis
-                                  └── AI 推荐 → DeepSeek（需要时）
+                                  └── AI 推荐 → DeepSeek
 ```
 
 ## 本地运行
@@ -182,7 +182,7 @@ Linux / macOS 使用 `./mvnw spring-boot:run`。应用默认启用 `local` Profi
 | `PUT /orders/{id}/status?status=2` | 更新订单状态，服务层校验角色和流转规则 |
 | `GET /orders/statistics/today` | 管理员查询当日营业额 |
 | `POST /users/ai-order/chat` | 顾客获取推荐或补充信息提示 |
-| `POST /users/ai-order/confirm` | 顾客确认有效方案 |
+| `POST /users/ai-order/cancel` | 取消当前推荐生成 |
 | `GET /admin/dish-ai-profiles` | 管理员查询 AI 菜品资料 |
 | `GET /admin/dish-ai-profiles/{dishId}`、`PUT /admin/dish-ai-profiles/{dishId}` | 管理员查询、维护单个菜品资料 |
 
@@ -206,36 +206,13 @@ Linux / macOS 使用 `./mvnw spring-boot:run`。应用默认启用 `local` Profi
 
 顾客身份从 JWT 取得。前端不提交菜品价格与总价；后端查询数据库价格、校验在售状态，再计算订单金额。每次请求最多 50 个明细项，每项数量为 1～99。员工代点示例同样不需要传 `userId`。
 
-### AI 推荐与确认
+### AI 推荐加入购物车
 
-`POST /users/ai-order/chat` 首轮请求：
+AI 只根据聊天和本店菜单生成推荐，不读取手动购物车；点击“加入购物车”后由普通购物车合并菜品，统一编辑并走普通下单。退出页面取消当前生成，保留已经完成的聊天。
 
-```json
-{
-  "tableId": 1,
-  "message": "推荐一下"
-}
-```
+聊天接口必须发送新的 `requestId`，后续轮次携带 `conversationId`。旧 `/users/ai-order/confirm` 已移除，推荐响应没有 `proposalId`。协议示例、取消、需求保留和升级说明见 [AI 点餐链路](docs/ai-ordering.md)。
 
-后续对话携带响应中的 `conversationId`。响应中的 `action` 有三种：
-
-| action | 客户端处理 |
-| --- | --- |
-| `ASK_CLARIFICATION` | 展示提示，继续输入，例如补充整桌点餐人数 |
-| `PROPOSAL` | 展示菜品、数量、数据库价格、总价和推荐理由，等待确认 |
-| `MANUAL_ORDER` | 展示失败原因并提供手动点餐入口，此时没有可确认方案 |
-
-收到 `PROPOSAL` 后，使用响应中的两个 ID 调用 `POST /users/ai-order/confirm`：
-
-```json
-{
-  "tableId": 1,
-  "conversationId": "从聊天响应复制",
-  "proposalId": "从推荐响应复制"
-}
-```
-
-上面的中文 ID 是说明占位符，发送时必须替换为实际返回值。确认成功的 `data` 包含 `proposalId`、`order` 和 `replayed`；重复成功确认时 `replayed=true`，不会再次加菜。
+普通 `/orders/scan-order` 也支持 `requestId`：同一次提交重试使用相同 ID，成功后新加菜使用新 ID。顾客端已自动处理；旧调用不传 ID 时没有去重保障。已有数据库需先执行 [普通下单去重迁移](src/main/resources/db/migration/20260913_01_order_submission.sql)。
 
 ## 核心实现与取舍
 
@@ -260,33 +237,13 @@ Linux / macOS 使用 `./mvnw spring-boot:run`。应用默认启用 `local` Profi
 
 ### AI 点餐边界
 
-对外入口为 [AiOrderingService](src/main/java/org/example/restaurant/service/AiOrderingService.java) 的 `chat` 与 `confirm`，确认复用已有下单流程。
+职责集中在 [服务编排](src/main/java/org/example/restaurant/service/impl/AiOrderingServiceImpl.java)、[模型适配器](src/main/java/org/example/restaurant/ai/DeepSeekDishSelectionAdapter.java)、[推荐校验](src/main/java/org/example/restaurant/ai/RecommendationPolicy.java) 和 [Redis 会话](src/main/java/org/example/restaurant/ai/state/RedisAiOrderConversationManager.java)；自然语言统一交给模型，服务端校验结构化选择和已识别条件。AI 服务不依赖订单服务。
 
-```text
-chat
- ├── 明确菜名、数量且无额外约束 → 本地匹配
- ├── 不含额外偏好的“推荐一下” → 本地招牌排序
- └── 口味、菜系等需求 → DeepSeek 结构化选择
-             ↓
-       服务端校验并生成预览 → Redis 保存方案
-                                      ↓
-confirm → MySQL 提交记录去重 → 领取有效方案 → OrdersService.placeOrder
-```
-
-- 候选集仅包含在售且 AI 资料标记为 `VERIFIED` 的菜品；缺少 AI 资料不影响手动点餐。
-- 模型选择候选菜品 ID、数量并给出理由。后端校验响应结构、ID、数量、合并后的重复项及已识别的忌口、菜系条件，价格由数据库提供。
-- 过敏原资料为空或 `UNKNOWN` 表示未知，不等同于没有过敏原；有相关忌口时会拒绝缺少资料的候选。规则依赖资料与文本识别，不能覆盖所有自然语言表达。
-- 模型调用发生在推荐阶段，订单事务只在确认阶段开启。远程调用失败返回手动点餐提示，不会因失败自动生成招牌菜方案。
-- Redis 会话绑定顾客与桌台，默认 30 分钟滑动过期，保留最近 20 轮；方案默认 10 分钟过期。新一轮请求开始时旧方案即失效，晚到的旧轮次结果不会覆盖新结果。
-- 默认每位顾客每分钟最多 10 次聊天请求、单条最多 500 字。状态与限流配置见 [AiOrderingStateProperties](src/main/java/org/example/restaurant/config/AiOrderingStateProperties.java)。
-- `ai_order_submission.proposal_id` 唯一约束用于确认去重，提交记录与订单写入处于同一 MySQL 事务。成功重试返回关联订单的**当前详情**，没有保存首次响应快照。
-- Redis 领取方案不随 MySQL 事务回滚；若领取后下单失败，原方案不能继续确认，需要重新推荐。
-
-实现入口：[推荐规则](src/main/java/org/example/restaurant/service/impl/AiOrderingServiceImpl.java)、[DeepSeek 适配器](src/main/java/org/example/restaurant/ai/DeepSeekDishSelectionAdapter.java)、[会话与方案](src/main/java/org/example/restaurant/ai/state/RedisAiOrderConversationManager.java)、[确认与去重](src/main/java/org/example/restaurant/service/impl/AiOrderConfirmationServiceImpl.java)。
+后台保存聊天识别的需求，忌口不随最近 20 轮历史的截断而丢失；会话绑定顾客、桌台和本次用餐，默认 30 分钟滑动过期。退出页面中止当前请求，旧轮次不能覆盖新结果。AI 的忌口校验只作用于推荐，不干预用户手动点菜。详见 [架构与行为约定](docs/ai-ordering.md)。
 
 ### 可选：启用 DeepSeek
 
-未配置 API Key 时可以运行普通点餐和本地推荐规则；需要远程模型的请求会返回 `MANUAL_ORDER`。MySQL、Redis 和 JWT 等基础配置仍需正确。
+未配置 API Key 时可以运行普通点餐；AI 聊天返回 `MANUAL_ORDER`。MySQL、Redis 和 JWT 等基础配置仍需正确。
 
 在本地配置中加入，或使用对应环境变量：
 
@@ -299,12 +256,12 @@ restaurant:
     model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
     connect-timeout: 3s
     read-timeout: 15s
-    max-tokens: 1024
+    max-tokens: 2048
 ```
 
 环境变量还包括 `DEEPSEEK_ENABLED`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_CONNECT_TIMEOUT`、`DEEPSEEK_READ_TIMEOUT` 和 `DEEPSEEK_MAX_TOKENS`。模型名是当前仓库配置默认值，实际可用性取决于服务提供方。
 
-当前使用 RestClient + Jackson，未引入 Spring AI，也没有 RAG、向量数据库或自主工具执行链路。
+当前使用 JDK HttpClient + Jackson，未引入 Spring AI，也没有 RAG、向量数据库或自主工具执行链路。
 
 ## 测试与验证
 
@@ -320,7 +277,7 @@ restaurant:
 
 ### 数据库、Redis 与并发集成测试
 
-[测试目录](src/test/java/org/example/restaurant) 包含订单创建与加菜、状态流转、活跃订单唯一约束、AI 多轮会话、过期替换、身份校验和重复确认等测试。
+[测试目录](src/test/java/org/example/restaurant) 包含订单创建与加菜、状态流转、活跃订单唯一约束、AI 多轮会话、过期替换、身份校验、取消和普通下单去重等测试。
 
 **部分集成测试使用 `test` Profile，部分使用 `local` Profile；`application-test.yml` 还可能导入本地配置。Profile 名称不代表数据库已经隔离。** 运行前必须确认实际数据源指向可丢弃的测试库，Redis 也使用独立测试实例或配置；测试可能写入、修改和清理数据。
 
@@ -334,23 +291,21 @@ restaurant:
 
 ### 真实模型冒烟测试
 
-[DeepSeekLiveDishSelectionTest](src/test/java/org/example/restaurant/ai/DeepSeekLiveDishSelectionTest.java) 在环境变量 `DEEPSEEK_API_KEY` 为非空且不是 `NOT_SET` 时启用；该条件不会预先检查 Key 是否有效。它会访问真实模型并可能产生费用。
+[DeepSeekLiveDishSelectionTest](src/test/java/org/example/restaurant/ai/DeepSeekLiveDishSelectionTest.java) 仅在 `RUN_LIVE_AI_TESTS=true` 时启用，另需提供有效的 `DEEPSEEK_API_KEY`。它会访问真实模型并可能产生费用。
 
 ```powershell
 .\mvnw.cmd "-Dtest=DeepSeekLiveDishSelectionTest" test
 ```
 
-直接执行未排除该类的全量 `test`，也可能在已设置 Key 时触发真实调用；`live-ai` 标签本身不会自动排除它。
+默认全量测试跳过真实模型。启用前在 PowerShell 设置 `$env:RUN_LIVE_AI_TESTS="true"`；模拟 HTTP 测试不调用真实模型。
 
 ## 当前限制与后续改进
 
-- **预算约束**：当前会根据数据库价格计算推荐总额，但尚未实现独立解析预算并强制拒绝超预算方案的完整校验，不能承诺推荐始终满足预算。
-- **确认时的数据变化**：下单会重新读取菜品价格并检查在售状态，但没有锁定预览价格，也未在确认阶段重新校验整套 AI 资料和忌口条件。
-- **错误分类**：模型超时、限流、非法响应等当前主要统一为 `AI_UNAVAILABLE`；会话层有独立错误码，尚未细分全部模型错误。
-- **部署范围**：当前后厨通知基于单进程连接集合；WebSocket 配置允许所有 Origin，API 文档默认开放，尚需按实际部署环境收紧配置。
-- **推荐评估**：已有规则与失败场景测试，尚无基于真实顾客数据的推荐效果评估或生产容量指标。
-
-进一步完善时，可优先补齐预算与确认校验、统一测试环境隔离，再按部署需求考虑通知可靠性和多实例支持。
+- 模型负责识别自然语言；服务端只能检查已识别的条件和现有菜品资料。复杂别名和模糊忌口仍需评估。
+- 推荐使用目录价格，普通下单会重新检查数据库价格及在售状态，不锁定预览价格，也不对普通购物车施加 AI 限制。
+- 取消通知在断网或强制关闭进程时可能送达失败；后端请求有超时限制，上游是否立即停止计算取决于提供方。
+- 当前模型错误主要统一为 `AI_UNAVAILABLE`，尚无真实顾客数据上的推荐质量或生产容量指标。
+- 后厨通知基于单进程连接集合；WebSocket Origin 和 API 文档访问设置需按部署环境配置。
 
 ## 阅读代码的建议顺序
 
@@ -358,4 +313,4 @@ restaurant:
 2. [OrdersServiceImpl](src/main/java/org/example/restaurant/service/impl/OrdersServiceImpl.java) → [OrdersMapper](src/main/java/org/example/restaurant/mapper/OrdersMapper.java)、[OrderDetailMapper](src/main/java/org/example/restaurant/mapper/OrderDetailMapper.java)：首次下单、加菜与金额计算。
 3. [init.sql](src/main/resources/db/init.sql) → [订单测试](src/test/java/org/example/restaurant/service/OrdersServiceTest.java)：表结构与业务约束如何对应。
 4. [WebConfig](src/main/java/org/example/restaurant/config/WebConfig.java) → [UserJwtInterceptor](src/main/java/org/example/restaurant/interceptor/UserJwtInterceptor.java)：登录身份如何进入请求上下文。
-5. [AiOrderingServiceImpl](src/main/java/org/example/restaurant/service/impl/AiOrderingServiceImpl.java) → [AiOrderConfirmationServiceImpl](src/main/java/org/example/restaurant/service/impl/AiOrderConfirmationServiceImpl.java)：推荐、状态管理与真正下单如何衔接。
+5. [AiOrderingServiceImpl](src/main/java/org/example/restaurant/service/impl/AiOrderingServiceImpl.java) → [RecommendationPolicy](src/main/java/org/example/restaurant/ai/RecommendationPolicy.java) → [Redis 会话](src/main/java/org/example/restaurant/ai/state/RedisAiOrderConversationManager.java)：推荐校验、会话与取消。

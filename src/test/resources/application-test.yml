@@ -1,14 +1,7 @@
 spring:
-  datasource:
-    url: jdbc:mysql://localhost:33306/restaurant_management_test?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8
-    username: root
-    password: restaurant_test_password
-    driver-class-name: com.mysql.cj.jdbc.Driver
-  data:
-    redis:
-      host: localhost
-      port: 36379
-      timeout: 500ms
+  config:
+    # test profile 复用本机开发配置中的数据库凭据；文件不存在时仍可使用 DB_* 环境变量。
+    import: optional:classpath:application-local.yml
 
 jwt:
   secret: restaurant-test-jwt-secret-at-least-32-characters-long

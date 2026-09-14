@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -15,6 +16,10 @@ import java.util.List;
  */
 @Data
 public class ScanOrderDTO {
+
+    @Size(max = 64, message = "请求ID过长")
+    @Pattern(regexp = "[A-Za-z0-9_-]+", message = "请求ID格式错误")
+    private String requestId;
 
     @NotNull(message = "桌台ID不能为空")
     private Long tableId;

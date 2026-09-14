@@ -2,7 +2,7 @@ package org.example.restaurant.controller;
 
 import org.example.restaurant.ai.AiOrderAction;
 import org.example.restaurant.ai.AiOrderingResponse;
-import org.example.restaurant.ai.AiRecommendationSource;
+
 import org.example.restaurant.common.JwtUtil;
 import org.example.restaurant.service.AiOrderingService;
 import org.example.restaurant.service.DishAiProfileService;
@@ -39,8 +39,19 @@ class AiOrderingAuthenticationIntegrationTest {
     private DishAiProfileService profileService;
 
     @Test
+    void mealIdentityRequiresCustomerAndReturnsNoOrderData() throws Exception {
+        mockMvc.perform(get("/users/ai-order/meal/3")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/users/ai-order/meal/3")
+                .header("Authorization", "Bearer " + JwtUtil.generateToken(1L, 1)))
+                .andExpect(status().isUnauthorized());
+        when(aiOrderingService.mealVersion(3L)).thenReturn(5L);
+        mockMvc.perform(get("/users/ai-order/meal/3")
+                .header("Authorization", "Bearer " + JwtUtil.generateUserToken(7L)))
+                .andExpect(jsonPath("$.data").value(5));
+    }
+    @Test
     void aiOrderingRequiresUserJwtAndRejectsEmployeeJwt() throws Exception {
-        String body = "{\"tableId\":3,\"message\":\"推荐一下\"}";
+        String body = "{\"tableId\":3,\"requestId\":\"request-auth\",\"message\":\"推荐一下\"}";
 
         mockMvc.perform(post("/users/ai-order/chat")
                         .contentType(MediaType.APPLICATION_JSON).content(body))
@@ -56,13 +67,13 @@ class AiOrderingAuthenticationIntegrationTest {
     void validUserJwtReachesAiOrderingController() throws Exception {
         when(aiOrderingService.chat(any())).thenReturn(new AiOrderingResponse(
                 AiOrderAction.ASK_CLARIFICATION, "请告诉我人数",
-                AiRecommendationSource.DEEPSEEK, List.of(), BigDecimal.ZERO,
-                "conversation-1", null, null));
+                List.of(), BigDecimal.ZERO,
+                "conversation-1", null));
 
         mockMvc.perform(post("/users/ai-order/chat")
                         .header("Authorization", "Bearer " + JwtUtil.generateUserToken(7L))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"tableId\":3,\"message\":\"帮我们点一桌\"}"))
+                        .content("{\"tableId\":3,\"requestId\":\"request-auth\",\"message\":\"帮我们点一桌\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(1))
                 .andExpect(jsonPath("$.data.action").value("ASK_CLARIFICATION"));

@@ -1,19 +1,11 @@
 package org.example.restaurant.ai.state;
-
+import org.example.restaurant.ai.AiOrderErrorCode;
 public class AiOrderStateException extends RuntimeException {
-    private final AiOrderStateErrorCode code;
-
-    public AiOrderStateException(AiOrderStateErrorCode code, String message) {
-        super(message);
+    private final AiOrderErrorCode code;
+    public AiOrderStateException(AiOrderErrorCode code) { this(code, null); }
+    public AiOrderStateException(AiOrderErrorCode code, Throwable cause) {
+        super(code.message(), cause);
         this.code = code;
     }
-
-    public AiOrderStateException(AiOrderStateErrorCode code, String message, Throwable cause) {
-        super(message, cause);
-        this.code = code;
-    }
-
-    public AiOrderStateErrorCode getCode() {
-        return code;
-    }
+    public AiOrderErrorCode getCode() { return code; }
 }

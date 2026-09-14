@@ -14,6 +14,7 @@ CREATE DATABASE IF NOT EXISTS restaurant_management
 USE restaurant_management;
 
 -- 清空旧表（确保结构与代码完全匹配）
+DROP TABLE IF EXISTS order_submission;
 DROP TABLE IF EXISTS ai_order_submission;
 DROP TABLE IF EXISTS order_status_log;
 DROP TABLE IF EXISTS order_detail;
@@ -126,22 +127,17 @@ CREATE TABLE IF NOT EXISTS orders (
 ) COMMENT '订单表';
 
 -- ============================================
--- 7. AI 点餐确认幂等记录
+-- 7. 普通下单请求去重
 -- ============================================
-CREATE TABLE IF NOT EXISTS ai_order_submission (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    proposal_id VARCHAR(64) NOT NULL COMMENT 'Redis 推荐方案ID',
-    conversation_id VARCHAR(64) NOT NULL COMMENT 'AI 会话ID',
-    user_id BIGINT NOT NULL COMMENT '确认顾客ID',
-    table_id BIGINT NOT NULL COMMENT '确认桌台ID',
-    status ENUM('PROCESSING', 'SUCCEEDED') NOT NULL DEFAULT 'PROCESSING',
-    order_id BIGINT COMMENT '成功创建或加菜的订单ID',
+-- 普通下单统一幂等。与订单写入共用事务；不删除旧 AI 提交历史。
+CREATE TABLE IF NOT EXISTS order_submission (
+    request_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
+    actor VARCHAR(64) NOT NULL,
+    request_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    order_id BIGINT NULL,
     create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_ai_order_submission_proposal (proposal_id),
-    INDEX idx_ai_order_submission_user_time (user_id, create_time),
-    INDEX idx_ai_order_submission_order (order_id)
-) COMMENT 'AI 点餐确认幂等记录';
+    INDEX idx_order_submission_order (order_id)
+) COMMENT '普通下单请求去重';
 
 -- ============================================
 -- 8. 订单明细表

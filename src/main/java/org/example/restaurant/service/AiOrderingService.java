@@ -1,12 +1,7 @@
 package org.example.restaurant.service;
-
-import org.example.restaurant.ai.AiOrderConfirmRequest;
-import org.example.restaurant.ai.AiOrderConfirmResponse;
-import org.example.restaurant.ai.AiOrderingRequest;
-import org.example.restaurant.ai.AiOrderingResponse;
-
+import org.example.restaurant.ai.*;
 public interface AiOrderingService {
     AiOrderingResponse chat(AiOrderingRequest request);
-
-    AiOrderConfirmResponse confirm(AiOrderConfirmRequest request);
+    void cancel(Long userId, String requestId);
+    long mealVersion(Long tableId);
 }

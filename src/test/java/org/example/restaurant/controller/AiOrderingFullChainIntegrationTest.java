@@ -1,285 +1,145 @@
 package org.example.restaurant.controller;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.example.restaurant.common.JwtUtil;
-import org.example.restaurant.entity.Dish;
-import org.example.restaurant.entity.DishAiProfile;
-import org.example.restaurant.entity.TableInfo;
-import org.example.restaurant.entity.User;
-import org.example.restaurant.mapper.DishMapper;
-import org.example.restaurant.mapper.TableInfoMapper;
-import org.example.restaurant.mapper.UserMapper;
-import org.example.restaurant.service.DishAiProfileService;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
+import org.example.restaurant.ai.*;
+import org.example.restaurant.common.*;
+import org.example.restaurant.config.AiOrderingStateProperties;
+import org.example.restaurant.dto.ScanOrderDTO;
+import org.example.restaurant.entity.DishAiCatalogItem;
+import org.example.restaurant.service.*;
+import org.junit.jupiter.api.*;
+import org.springframework.beans.factory.annotation.*;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.test.context.*;
 import org.springframework.test.web.servlet.MockMvc;
-
+import org.springframework.http.MediaType;
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import java.sql.Statement;
+import java.util.*;
+import java.util.concurrent.*;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@SpringBootTest(properties = "restaurant.ai.enabled=false")
+@SpringBootTest
 @AutoConfigureMockMvc
-@ActiveProfiles("local")
+@ActiveProfiles("test")
 class AiOrderingFullChainIntegrationTest {
-    @Autowired
-    private MockMvc mockMvc;
-    @Autowired
-    private ObjectMapper objectMapper;
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
-    @Autowired
-    private UserMapper userMapper;
-    @Autowired
-    private TableInfoMapper tableInfoMapper;
-    @Autowired
-    private DishMapper dishMapper;
-    @Autowired
-    private DishAiProfileService profileService;
-    @Autowired
-    @Qualifier("aiOrderRedisTemplate")
-    private RedisTemplate<String, String> aiRedisTemplate;
-
-    private Long userId;
-    private Long tableId;
-    private Long dishId;
-    private Long orderId;
-    private String conversationId;
-    private String proposalId;
-    private String token;
-    private String dishName;
-
-    @BeforeEach
-    void setUp() {
-        String marker = UUID.randomUUID().toString();
-
-        User user = new User();
-        user.setName("IT-AI用户-" + marker);
-        user.setPassword("not-used");
-        user.setPhone("198" + String.format("%08d",
-                Integer.toUnsignedLong(marker.hashCode()) % 100_000_000L));
-        user.setCreateTime(LocalDateTime.now());
-        userMapper.insert(user);
-        userId = userMapper.findByPhone(user.getPhone()).getId();
-        token = JwtUtil.generateUserToken(userId);
-
-        TableInfo table = new TableInfo();
-        table.setName("IT-AI桌台-" + marker);
-        table.setCapacity(4);
-        table.setStatus(0);
-        tableInfoMapper.insert(table);
-        tableId = table.getId();
-
-        Long categoryId = jdbcTemplate.queryForObject(
-                "SELECT id FROM category ORDER BY id LIMIT 1", Long.class);
-        Dish dish = new Dish();
-        dishName = "IT-AI菜-" + marker;
-        dish.setName(dishName);
-        dish.setCategoryId(categoryId);
-        dish.setPrice(new BigDecimal("33.50"));
-        dish.setDescription("清淡鲜香的全链路测试菜");
-        dish.setStatus(1);
-        dish.setCreateTime(LocalDateTime.now());
-        dish.setUpdateTime(LocalDateTime.now());
-        dishMapper.insert(dish);
-        dishId = dish.getId();
-
-        DishAiProfile profile = new DishAiProfile();
-        profile.setDishId(dishId);
-        profile.setCuisine("家常菜");
-        profile.setTasteTags("清淡,鲜香");
-        profile.setSpicyLevel(0);
-        profile.setIngredients("时蔬,猪肉");
-        profile.setAllergens("NONE");
-        profile.setDietaryTags("含肉");
-        profile.setIsSignature(false);
-        profile.setRecommendationNotes("全链路测试菜品");
-        profile.setServingPeople(2);
-        profile.setProfileStatus("VERIFIED");
-        profileService.upsert(profile);
+    private static final String PREFIX = "it:ai-flow:" + UUID.randomUUID() + ":";
+    @DynamicPropertySource static void properties(DynamicPropertyRegistry registry) {
+        registry.add("restaurant.ai-ordering.state.key-prefix", () -> PREFIX);
     }
-
-    @AfterEach
-    void tearDown() {
-        if (proposalId != null) {
-            jdbcTemplate.update(
-                    "DELETE FROM ai_order_submission WHERE proposal_id = ?", proposalId);
-        }
+    @Autowired MockMvc mvc;
+    @Autowired ObjectMapper mapper;
+    @Autowired JdbcTemplate jdbc;
+    @Autowired OrdersService orders;
+    @Autowired @Qualifier("aiOrderRedisTemplate") RedisTemplate<String, String> redis;
+    @MockBean DishSelectionGateway gateway;
+    @MockBean DishAiProfileService catalog;
+    private Long userId, tableId, dishId;
+    private String requestId;
+    @BeforeEach void fixtures() {
+        String marker = UUID.randomUUID().toString().replace("-", "");
+        userId = insert("INSERT INTO user(name,password,phone,sex) VALUES (?,?,?,1)", "AI测试-" + marker, "test-only", "T" + marker.substring(0,18));
+        tableId = insert("INSERT INTO table_info(name,capacity,status,version) VALUES (?,2,0,0)", "AI测试-" + marker);
+        dishId = insert("INSERT INTO dish(name,category_id,price,status) VALUES (?,1,10.00,1)", "测试白切鸡-" + marker);
+        requestId = UUID.randomUUID().toString();
+        var dish = new DishAiCatalogItem(); dish.setDishId(dishId); dish.setDishName("白切鸡");
+        dish.setPrice(BigDecimal.TEN); dish.setCuisine("粤菜"); dish.setIngredients("鸡肉"); dish.setAllergens("NONE"); dish.setSpicyLevel(0);
+        when(catalog.listVerifiedOnSaleCatalog()).thenReturn(List.of(dish));
+        when(gateway.select(any(), any())).thenReturn(new DishSelectionResult(DishSelectionIntent.RECOMMENDATION,
+                List.of(new DishSelectionResult.Selection(dishId, 2, "推荐")), "请加入购物车", DiningPreferences.empty()));
+    }
+    @AfterEach void cleanup() {
+        UserContext.clear();
+        if (userId != null) jdbc.update("DELETE FROM order_submission WHERE actor=?", "user:" + userId);
         if (tableId != null) {
-            List<Long> orderIds = jdbcTemplate.queryForList(
-                    "SELECT id FROM orders WHERE table_id = ?", Long.class, tableId);
-            for (Long capturedOrderId : orderIds) {
-                jdbcTemplate.update("DELETE FROM order_status_log WHERE order_id = ?", capturedOrderId);
-                jdbcTemplate.update("DELETE FROM order_detail WHERE order_id = ?", capturedOrderId);
-                jdbcTemplate.update("DELETE FROM orders WHERE id = ?", capturedOrderId);
-            }
+            jdbc.update("DELETE FROM order_detail WHERE order_id IN (SELECT id FROM orders WHERE table_id=?)", tableId);
+            jdbc.update("DELETE FROM order_status_log WHERE order_id IN (SELECT id FROM orders WHERE table_id=?)", tableId);
+            jdbc.update("DELETE FROM orders WHERE table_id=?", tableId);
+            jdbc.update("DELETE FROM table_info WHERE id=?", tableId);
         }
-        if (dishId != null) {
-            jdbcTemplate.update("DELETE FROM dish_ai_profile WHERE dish_id = ?", dishId);
-            jdbcTemplate.update("DELETE FROM dish WHERE id = ?", dishId);
-        }
-        if (tableId != null) {
-            jdbcTemplate.update("DELETE FROM table_info WHERE id = ?", tableId);
-        }
-        if (userId != null) {
-            jdbcTemplate.update("DELETE FROM `user` WHERE id = ?", userId);
-        }
-
-        List<String> redisKeys = new ArrayList<>();
-        if (conversationId != null) {
-            redisKeys.add("restaurant:ai-order:conversation:" + conversationId + ":meta");
-            redisKeys.add("restaurant:ai-order:conversation:" + conversationId + ":history");
-        }
-        if (proposalId != null) {
-            redisKeys.add("restaurant:ai-order:proposal:" + proposalId);
-        }
-        if (userId != null) {
-            redisKeys.add("restaurant:ai-order:rate:" + userId);
-        }
-        if (!redisKeys.isEmpty()) {
-            aiRedisTemplate.delete(redisKeys);
-            for (String redisKey : redisKeys) {
-                assertFalse(Boolean.TRUE.equals(aiRedisTemplate.hasKey(redisKey)),
-                        "测试 Redis key 应已精确清理: " + redisKey);
-            }
-        }
-        if (dishId != null) {
-            assertEquals(0, jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM dish WHERE id = ?", Integer.class, dishId));
-        }
-        if (tableId != null) {
-            assertEquals(0, jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM table_info WHERE id = ?", Integer.class, tableId));
-        }
-        if (userId != null) {
-            assertEquals(0, jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM `user` WHERE id = ?", Integer.class, userId));
-        }
+        if (dishId != null) jdbc.update("DELETE FROM dish WHERE id=?", dishId);
+        if (userId != null) jdbc.update("DELETE FROM user WHERE id=?", userId);
+        var keys = redis.keys(PREFIX + "*"); if (keys != null && !keys.isEmpty()) redis.delete(keys);
+    }
+    @Test void recommendationThenOrdinaryCartSubmissionReplaysWithoutDuplicateItems() throws Exception {
+        var chat = mvc.perform(post("/users/ai-order/chat").header("Authorization", token()).contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsString(Map.of("tableId", tableId, "requestId", requestId, "message", "两份白切鸡"))))
+                .andExpect(jsonPath("$.data.action").value("PROPOSAL")).andReturn();
+        assertFalse(mapper.readTree(chat.getResponse().getContentAsString()).path("data").has("proposalId"));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM orders WHERE table_id=?", Integer.class, tableId));
+        String body = mapper.writeValueAsString(dto());
+        for (int i=0; i<2; i++) mvc.perform(post("/orders/scan-order").header("Authorization", token()).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(jsonPath("$.code").value(1));
+        assertEquals(2, quantity());
+    }
+    @Test void concurrentSameRequestCreatesOrAddsOnlyOnce() throws Exception {
+        var pool = Executors.newFixedThreadPool(2);
+        var start = new CountDownLatch(1);
+        try {
+            Callable<Long> submit = () -> { start.await(); UserContext.setUserId(userId);
+                try { return orders.placeOrder(dto()).getId(); } finally { UserContext.clear(); } };
+            var a = pool.submit(submit); var b = pool.submit(submit); start.countDown();
+            assertEquals(a.get(10, TimeUnit.SECONDS), b.get(10, TimeUnit.SECONDS));
+            assertEquals(2, quantity());
+        } finally { pool.shutdownNow(); }
+    }
+    @Test void failedOrderRollsBackTheSubmissionAndCanRetry() {
+        UserContext.setUserId(userId);
+        jdbc.update("UPDATE dish SET status=0 WHERE id=?", dishId);
+        assertThrows(BusinessException.class, () -> orders.placeOrder(dto()));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM order_submission WHERE request_id=?", Integer.class, requestId));
+        jdbc.update("UPDATE dish SET status=1 WHERE id=?", dishId);
+        assertNotNull(orders.placeOrder(dto()).getId());
+        assertEquals(2, quantity());
+    }
+    @Test void requestCannotBeReusedWithDifferentAmounts() {
+        UserContext.setUserId(userId); orders.placeOrder(dto());
+        var changed = dto(); changed.getItems().get(0).setAmount(3);
+        assertThrows(BusinessException.class, () -> orders.placeOrder(changed));
+        assertEquals(2, quantity());
+    }
+    @Test void cancellationArrivingBeforeChatPreventsModelCall() throws Exception {
+        mvc.perform(post("/users/ai-order/cancel").header("Authorization", token()).contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsString(Map.of("requestId", requestId)))).andExpect(jsonPath("$.code").value(1));
+        mvc.perform(post("/users/ai-order/chat").header("Authorization", token()).contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsString(Map.of("tableId", tableId, "requestId", requestId, "message", "推荐"))))
+                .andExpect(jsonPath("$.data.errorCode").value("CANCELLED"));
+        verify(gateway, never()).select(any(), any());
+    }
+    @Test
+    void aiDietaryExclusionsDoNotRestrictManualCheckout() throws Exception {
+        when(gateway.select(any(), any())).thenReturn(new DishSelectionResult(
+                DishSelectionIntent.ASK_CLARIFICATION, List.of(), "已记下不吃鸡肉，请补充口味。",
+                new DiningPreferences(List.of("鸡肉"), null, null, null, List.of())));
+        mvc.perform(post("/users/ai-order/chat").header("Authorization", token())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsString(Map.of("tableId", tableId, "requestId", requestId,
+                        "message", "我不吃鸡肉"))))
+                .andExpect(jsonPath("$.data.action").value("ASK_CLARIFICATION"));
+        // 用户仍可在普通购物车手动选择鸡肉；普通下单不读取 AI 会话。
+        mvc.perform(post("/orders/scan-order").header("Authorization", token())
+                .contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(dto())))
+                .andExpect(jsonPath("$.code").value(1));
+        assertEquals(2, quantity());
     }
 
-    @Test
-    void directChatConfirmAndReplayTraverseHttpRedisMysqlAndExistingOrderService() throws Exception {
-        String chatBody = objectMapper.writeValueAsString(java.util.Map.of(
-                "tableId", tableId,
-                "message", "来两份" + dishName));
-        String chatJson = mockMvc.perform(post("/users/ai-order/chat")
-                        .header("Authorization", "Bearer " + token)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(chatBody))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(1))
-                .andExpect(jsonPath("$.data.action").value("PROPOSAL"))
-                .andExpect(jsonPath("$.data.source").value("DIRECT_MATCH"))
-                .andExpect(jsonPath("$.data.items[0].dishId").value(dishId))
-                .andExpect(jsonPath("$.data.items[0].amount").value(2))
-                .andReturn().getResponse().getContentAsString();
-        JsonNode chatData = objectMapper.readTree(chatJson).path("data");
-        conversationId = chatData.path("conversationId").asText();
-        proposalId = chatData.path("proposalId").asText();
-        assertNotNull(conversationId);
-        assertNotNull(proposalId);
-
-        String confirmBody = objectMapper.writeValueAsString(java.util.Map.of(
-                "tableId", tableId,
-                "conversationId", conversationId,
-                "proposalId", proposalId));
-        String confirmJson = mockMvc.perform(post("/users/ai-order/confirm")
-                        .header("Authorization", "Bearer " + token)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(confirmBody))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(1))
-                .andExpect(jsonPath("$.data.idempotentReplay").value(false))
-                .andExpect(jsonPath("$.data.order.totalAmount").value(67.00))
-                .andReturn().getResponse().getContentAsString();
-        orderId = objectMapper.readTree(confirmJson)
-                .path("data").path("order").path("id").asLong();
-
-        mockMvc.perform(post("/users/ai-order/confirm")
-                        .header("Authorization", "Bearer " + token)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(confirmBody))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(1))
-                .andExpect(jsonPath("$.data.idempotentReplay").value(true))
-                .andExpect(jsonPath("$.data.order.id").value(orderId));
-
-        assertEquals(1, jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM order_detail WHERE order_id = ?",
-                Integer.class, orderId));
-        assertEquals(2, jdbcTemplate.queryForObject(
-                "SELECT amount FROM order_detail WHERE order_id = ? AND dish_id = ?",
-                Integer.class, orderId, dishId));
-        assertEquals(1, jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM ai_order_submission WHERE proposal_id = ? AND status = 'SUCCEEDED'",
-                Integer.class, proposalId));
-    }
-
-    @Test
-    void preferenceFreeChatTraversesHttpDatabaseManualAndRedisUsingSignatureRule() throws Exception {
-        String body = objectMapper.writeValueAsString(java.util.Map.of(
-                "tableId", tableId,
-                "message", "帮我推荐几道菜"));
-        String responseJson = mockMvc.perform(post("/users/ai-order/chat")
-                        .header("Authorization", "Bearer " + token)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(body))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(1))
-                .andExpect(jsonPath("$.data.action").value("PROPOSAL"))
-                .andExpect(jsonPath("$.data.source").value("SIGNATURE_RULE"))
-                .andExpect(jsonPath("$.data.items").isNotEmpty())
-                .andExpect(jsonPath("$.data.totalAmount").isNumber())
-                .andReturn().getResponse().getContentAsString();
-        JsonNode responseData = objectMapper.readTree(responseJson).path("data");
-        conversationId = responseData.path("conversationId").asText();
-        proposalId = responseData.path("proposalId").asText();
-
-        assertFalse(conversationId.isBlank());
-        assertFalse(proposalId.isBlank());
-        assertEquals(0, jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM orders WHERE table_id = ?", Integer.class, tableId),
-                "推荐预览未经确认不得创建订单");
-    }
-
-    @Test
-    void complexAllergyRequestWithDisabledModelFailsClosedWithoutOrder() throws Exception {
-        String body = objectMapper.writeValueAsString(java.util.Map.of(
-                "tableId", tableId,
-                "message", "我对花生严重过敏，想吃清淡的川菜"));
-        String responseJson = mockMvc.perform(post("/users/ai-order/chat")
-                        .header("Authorization", "Bearer " + token)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(body))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(0))
-                .andExpect(jsonPath("$.data.action").value("MANUAL_ORDER"))
-                .andExpect(jsonPath("$.data.items").isEmpty())
-                .andExpect(jsonPath("$.data.proposalId").doesNotExist())
-                .andReturn().getResponse().getContentAsString();
-        conversationId = objectMapper.readTree(responseJson)
-                .path("data").path("conversationId").asText();
-
-        assertEquals(0, jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM orders WHERE table_id = ?", Integer.class, tableId));
+    private int quantity() { return jdbc.queryForObject("SELECT COALESCE(SUM(d.amount),0) FROM order_detail d JOIN orders o ON o.id=d.order_id WHERE o.table_id=?", Integer.class, tableId); }
+    private String token() { return "Bearer " + JwtUtil.generateUserToken(userId); }
+    private ScanOrderDTO dto() { var d=new ScanOrderDTO(); d.setTableId(tableId); d.setRequestId(requestId);
+        var item=new ScanOrderDTO.Item(); item.setDishId(dishId); item.setAmount(2); d.setItems(List.of(item)); return d; }
+    private Long insert(String sql, Object... args) {
+        var key=new GeneratedKeyHolder();
+        jdbc.update(c -> { var s=c.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS);
+            for(int i=0;i<args.length;i++) s.setObject(i+1,args[i]); return s; }, key);
+        return Objects.requireNonNull(key.getKey()).longValue();
     }
 }
